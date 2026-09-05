@@ -1,0 +1,197 @@
+# Architecture
+
+Status: the M0 foundation is implemented and tested; everything beyond it is design only.
+This document describes the intended shape of the system and marks clearly what exists
+today. See `docs/roadmap.md` for what is next and `README.md` for the honest list of what
+Assay cannot yet do.
+
+---
+
+## 1. The one-sentence version
+
+Assay derives an **expectation** of how an application should behave from the
+application's own metadata, observes how it **actually** behaves, and reports the
+difference — together with an honest account of everything it could not test.
+
+---
+
+## 2. Pipeline
+
+```
+  Target + Scope
+       │
+       ▼
+  Discovery ────────────────► Attack Surface (operations, inputs, hosts)
+   • specification (file/URL)      each fact carries PROVENANCE
+   • framework adapters (probes)
+   • runtime observation
+       │
+       ▼
+  Oracle derivation ────────► Expected behaviour
+   • declared  (config, spec)      each expectation carries PROVENANCE
+   • inferred  (adapter, source)   and is FALSIFIABLE
+       │
+       ▼
+  Planning ─────────────────► Plan (checks × targets), gated by SAFETY PROFILE
+       │                            everything not planned becomes a COVERAGE GAP
+       ▼
+  Execution ────────────────► Observations
+   • native checks                 external engines are optional and swappable
+   • external engines (ZAP/Nuclei/Semgrep/Hadrian)
+       │
+       ▼
+  Outcome classification ───► ALLOWED │ DENIED │ NOT_FOUND │ ERROR │ INDETERMINATE
+       │
+       ▼
+  Verification ─────────────► confirmed │ rejected │ blocked
+       │                            strategy differs per vulnerability class
+       ▼
+  Evidence ─────────────────► redacted at capture, content-addressed, referenceable
+       │
+       ▼
+  Findings + Coverage ──────► reports (JSON, SARIF)
+```
+
+**Two deviations from the originally proposed pipeline**, both deliberate:
+
+1. **Outcome classification is its own stage.** Evidence from the reference applications
+   showed that mapping a response to "allowed" or "denied" is application-specific and
+   frequently ambiguous; burying it inside checks would have hard-coded a wrong
+   assumption into every check. See ADR-0004.
+2. **Threat modelling is not a pipeline stage.** It is an input to planning, not a
+   runtime phase. Modelling it as a stage implied a capability we do not have.
+
+---
+
+## 3. Packages
+
+Concrete types are preferred to interfaces. An interface appears only where a second
+implementation genuinely exists or is imminent.
+
+| Package | Owns | Status |
+|---|---|---|
+| `cmd/assay` | binary entrypoint | ✅ |
+| `internal/cli` | command surface, exit codes, human output | ✅ |
+| `internal/config` | `assay.yaml` loading, strict decode, semantic validation | ✅ |
+| `internal/model` | the normalized application-security model | ✅ |
+| `internal/scope` | the authorization boundary for every request | ✅ |
+| `internal/httpx` | the only way to reach the network | ✅ |
+| `internal/redact` | secret redaction at capture time (zero-dependency leaf) | ✅ |
+| `internal/openapi` | specification ingestion → operations + declared expectations | ✅ |
+| `internal/outcome` | response → access outcome classification | ✅ |
+| `internal/check` | check implementations | ✅ |
+| `internal/engine` | assessment lifecycle: plan, execute, record; owns the `Check` interface | ✅ |
+| `internal/store` | run persistence, evidence storage, permissions | ✅ |
+| `internal/report` | JSON and SARIF renderers; owns the versioned wire DTOs | ✅ |
+| `adapters/*` | out-of-process framework probes | ⬜ designed (ADR-0002) |
+| `engines/*` | external scanner integrations | ⬜ designed (ADR-0005) |
+
+**Status is ⬜ until code for that package is merged with tests.** A project whose thesis
+is honest accounting of what it could not test must not overstate its own completeness.
+`scripts/verify-control-claims.py` runs in CI and fails the build if the threat model
+cites a test that does not exist, so the same rule is enforced rather than merely
+promised.
+
+Coverage accounting has no package of its own: its types live in `model` and its
+accumulation in `engine`, because a ledger that only appends and reads does not need one.
+
+**Dependency rule.** `model` owns every type that two otherwise-unrelated packages must
+both name, imports nothing outside the standard library, and carries **no JSON tags** — so
+that renaming a field is never a breaking change to our published output. `redact` is a
+zero-dependency leaf operating on bytes and headers. `report` owns the versioned wire DTOs
+and the mapping from `model` to them; `store` persists those DTOs rather than the model, so
+there is exactly one wire schema. Nothing depends on `cli`.
+
+---
+
+## 4. The normalized model
+
+Framework-neutral by construction, and validated against two deliberately dissimilar
+applications (`docs/research/reference-applications.md`).
+
+- **Operation** — a callable unit of attack surface: method, path template, host,
+  parameters, declared security requirements, provenance.
+- **Identity** — an actor, with credentials the framework may use. Never invented.
+- **Expectation** — what *should* happen for an (operation, identity) pair, with
+  provenance and a falsifiable predicate.
+- **Observation** — what *did* happen, with evidence references.
+- **Outcome** — the classification of an observation, including `INDETERMINATE`.
+- **Finding** — a difference between expectation and outcome, with severity, confidence,
+  state and evidence.
+- **CoverageEntry** — one unit of intended work and its disposition: tested, blocked
+  (with cause), or untested (with reason).
+
+Deliberately **not** in the model yet: tenancy relationships, workflows, resource
+ownership graphs. The boundaries exist; the types do not, because inventing them without
+a consumer would be speculative. See ADR-0009.
+
+### Provenance
+
+Every fact and every expectation records how it was obtained:
+
+`declared` (the operator or the application stated it) → `inferred` (derived by analysis;
+a hypothesis) → `observed` (seen at runtime) → `verified` (deterministically confirmed).
+
+Provenance never upgrades itself. An inferred expectation that is contradicted becomes a
+**rejected hypothesis**, which is a reportable outcome, not a finding.
+
+---
+
+## 5. Safety profiles
+
+Strictly ordered: `discovery` < `verification` < `intrusive`.
+
+Every check declares the impact it requires. If required impact exceeds the effective
+profile, the check **does not run and is recorded as blocked with a cause**. Profiles
+never escalate implicitly; the effective profile is recorded in every result. `intrusive`
+additionally requires explicit authorization in configuration.
+
+This is the mechanism that makes "potentially destructive behaviour must never happen
+accidentally" a property of the type system rather than a convention.
+
+---
+
+## 6. Evidence
+
+- Redacted **at capture**, so secrets never reach disk (threat model T-06).
+- Content-addressed and stored once; findings **reference** evidence rather than
+  embedding copies.
+- Stored under a per-run directory, `0700`/`0600`.
+- An evidence source declares what it can prove. Critically, an audit-log source may
+  **corroborate** a mutation but its silence proves nothing
+  (`docs/research/reference-applications.md` §4).
+
+---
+
+## 7. Coverage
+
+Coverage is a first-class output, not a summary statistic. It is a **ledger**: every unit
+of intended work has a disposition.
+
+A blocked entry names its cause — missing identity, missing resource, authentication
+failure, engine unavailable, unsupported protocol, environment mismatch, insufficient
+privilege, or safety policy. A percentage is reported only alongside the ledger, never
+alone, and never as a claim about security.
+
+**A run that executed no checks cannot report success.**
+
+---
+
+## 8. Failure semantics
+
+- An engine crash is an engine crash. It becomes a blocked coverage entry and a recorded
+  tool failure — never an absence of findings.
+- Partial assessments are first-class and are reported as partial.
+- Exit codes distinguish *"ran cleanly, nothing found"* from *"could not run"* from
+  *"policy threshold exceeded"*.
+
+---
+
+## 9. What is intentionally missing
+
+Discovery beyond specification ingestion; any external engine integration; identity and
+authentication providers; the adversarial authorization engine; tenancy; workflows;
+SQLite; the dashboard; AI.
+
+Each is absent because building it now would mean shipping an unproven abstraction. The
+seams are documented so the additions are leaves rather than rewrites.

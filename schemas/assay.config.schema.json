@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jaylordibe/application-security-framework/schemas/assay.config.schema.json",
+  "title": "Assay configuration (assay.yaml)",
+  "description": "Configuration for the assay CLI. The Go parser is the runtime authority; this schema exists for editor completion and CI validation, and a conformance test asserts the two agree on a corpus of valid and invalid documents.",
+  "type": "object",
+  "required": [
+    "target"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "assay/v1alpha1",
+      "description": "Configuration contract version. Required from the first release so that adding it later cannot invalidate existing files."
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseURL"
+      ],
+      "properties": {
+        "baseURL": {
+          "type": "string",
+          "pattern": "^https?://[^@]*$",
+          "description": "Root of the application under assessment. Its origin is always in scope. Must not embed credentials."
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "include": {
+          "type": "array",
+          "description": "Additional allowed endpoints. Scope is an allowlist; nothing outside it is contacted.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "host"
+            ],
+            "properties": {
+              "scheme": {
+                "enum": [
+                  "http",
+                  "https"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ports": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                }
+              },
+              "pathPrefix": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "allowPrivateAddresses": {
+          "type": "boolean",
+          "description": "Permit loopback and RFC1918 addresses. Required for a local target; cloud metadata addresses stay denied regardless."
+        }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "enum": [
+            "discovery",
+            "verification",
+            "intrusive"
+          ],
+          "description": "Safety profile. Strictly ordered; never escalates implicitly."
+        },
+        "authorizeIntrusive": {
+          "type": "boolean",
+          "description": "Required for the intrusive profile. Selecting a profile is not by itself authorization to use it."
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "requestsPerSecond": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "excludeOperations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Operation ids that must never be exercised, e.g. \"POST /orders\"."
+        },
+        "excludeAuthEndpoints": {
+          "type": "boolean",
+          "description": "Skip routes that look like authentication. Sweeping these can lock real accounts. Defaults to true."
+        }
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "openAPIFile": {
+          "type": "string",
+          "description": "Path to a specification on disk. Empty means unset."
+        },
+        "openAPIURL": {
+          "type": "string",
+          "pattern": "^(https?://.*)?$",
+          "description": "URL of a specification served by the target. Empty means unset."
+        },
+        "probeWellKnownPaths": {
+          "type": "boolean"
+        }
+      },
+      "not": {
+        "allOf": [
+          {
+            "required": [
+              "openAPIFile"
+            ],
+            "properties": {
+              "openAPIFile": {
+                "minLength": 1
+              }
+            }
+          },
+          {
+            "required": [
+              "openAPIURL"
+            ],
+            "properties": {
+              "openAPIURL": {
+                "minLength": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Application-specific signals for classifying responses. These come from the operator only: a target that could define its own oracle could suppress every finding.",
+      "properties": {
+        "errorCodePointer": {
+          "type": "string",
+          "pattern": "^(/.*)?$",
+          "description": "JSON pointer to a stable machine-readable error code, e.g. \"/errorCode\"."
+        },
+        "deniedCodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notFoundCodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Stated deviations from production, recorded as facts. Assay does not compute a fidelity score.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "differences": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "When a run fails the build. Severity thresholds; empty disables a rule. Suspected findings count by default, because Assay cannot reach 'confirmed' without credentials and gating only on confirmed findings would exit 0 on a real bypass.",
+      "properties": {
+        "failOnConfirmed": {
+          "enum": [
+            "",
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "Lowest severity of a CONFIRMED finding that fails the run."
+        },
+        "failOnSuspected": {
+          "enum": [
+            "",
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "Lowest severity of a SUSPECTED finding that fails the run."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

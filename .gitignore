@@ -1,0 +1,22 @@
+# Build output.
+# Anchored with a leading slash: a bare "assay" would also match the cmd/assay
+# source directory and silently exclude the program's entrypoint.
+/dist/
+/bin/
+/assay
+
+# Assessment output (may contain evidence and redaction misses)
+.assay/
+*.assay-run/
+
+# Local overrides
+assay.local.yaml
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

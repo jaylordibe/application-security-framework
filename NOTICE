@@ -1,0 +1,48 @@
+Assay
+Copyright 2026 The Assay Authors
+
+This product includes software developed as part of the Assay project
+(https://github.com/jaylordibe/application-security-framework),
+licensed under the Apache License, Version 2.0.
+
+TRADEMARKS AND AFFILIATION
+
+Assay is an independent open-source project. It is NOT affiliated with, endorsed
+by, or sponsored by any of the following, whose names may appear in this project's
+documentation and code solely to identify the software they refer to:
+
+  - OWASP Foundation, Inc. ("OWASP", "OWASP ZAP", "OWASP API Security Top 10")
+  - Checkmarx Ltd. ("ZAP by Checkmarx")
+  - ProjectDiscovery, Inc. ("Nuclei")
+  - Semgrep, Inc. ("Semgrep")
+  - Praetorian Security, Inc. ("Hadrian", "Vespasian")
+  - Microsoft Corporation ("Playwright", "RESTler")
+  - PortSwigger Ltd. ("Burp Suite")
+  - GitLab Inc., GitHub, Inc., and Aikido Security ("opengrep")
+
+All trademarks are the property of their respective owners.
+
+THIRD-PARTY DEPENDENCIES
+
+This binary links the following, each under its own licence. Run
+`go list -m all` for the authoritative set.
+
+  github.com/spf13/cobra                  Apache-2.0
+  github.com/spf13/pflag                  BSD-3-Clause
+  github.com/goccy/go-yaml                MIT
+  golang.org/x/net                        BSD-3-Clause
+  golang.org/x/text                       BSD-3-Clause
+  github.com/santhosh-tekuri/jsonschema   Apache-2.0  (tests only)
+  github.com/inconshreveable/mousetrap    Apache-2.0
+
+NO BUNDLED SECURITY ENGINES
+
+Assay bundles no external security engine and downloads none at runtime. Where it
+can invoke ZAP, Nuclei, Semgrep, opengrep or Hadrian, those are separate programs
+that the operator installs, running as separate processes under their own licences.
+
+Semgrep's registry rules are licensed under the Semgrep Rules License v1.0, which
+permits use only for the user's own internal business purposes and forbids
+distribution or provision as a service. Assay therefore never ships, vendors,
+bundles or auto-fetches Semgrep registry rules, and its documentation and defaults
+do not reference registry rule packs.
