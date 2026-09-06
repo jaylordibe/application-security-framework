@@ -114,6 +114,35 @@ resources:
   #   #   values:
   #   #     status: "appsec-marker"
 
+adapters:
+  # Framework adapters read your application's own source and report what it
+  # expects to enforce — which operations require authentication, which have an
+  # authorization control. That gives the oracle information OpenAPI cannot
+  # express, and makes operations testable that were previously untestable.
+  #
+  # An adapter fact is an expectation, never evidence. Whether a control
+  # actually works is established by the runtime checks, not by reading source.
+  #
+  # Adapters are opt-in. Nothing runs unless you name it here.
+  use: []
+  # sourceRoot: ../my-application
+  #
+  # "none" (the default) permits only adapters that do not execute your
+  # application's code. "execute-target-code" authorises framework-native
+  # introspection — 'artisan route:list' boots the whole framework and runs
+  # every service provider; importing a NestJS module executes it. Higher
+  # fidelity, and a real decision.
+  # trust: none
+  #
+  # use:
+  #   - name: laravel
+  #     path: ./dist/appsec-adapter-laravel
+  #   - name: nestjs
+  #     path: ./dist/appsec-adapter-nestjs
+  #     # The adapter's environment is built from nothing. Name a variable here
+  #     # to forward it; this tool's own credentials can never be forwarded.
+  #     # passEnv: [HOME]
+
 discovery:
   # AppSec Framework derives expectations from the application's own
   # specification. Give it one, or let it probe the usual locations on the

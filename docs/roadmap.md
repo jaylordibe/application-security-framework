@@ -13,7 +13,7 @@ disappear.** A milestone that adds surface without removing a limitation is defe
 
 Delivered in this repository, with tests.
 
-Research and justification; threat model; architecture and thirteen ADRs; the domain model;
+Research and justification; threat model; architecture and fourteen ADRs; the domain model;
 scope enforcement; the HTTP client; capture-time redaction; OpenAPI ingestion with oracle
 grading; outcome classification; one check with a verification ladder; the coverage
 ledger; JSON and SARIF reporting; the run store; the offline evaluation harness; CI.
@@ -121,27 +121,69 @@ permission or role matrices, no framework adapters.
 
 ---
 
-## Next — M3: Framework adapters
+## Done (partial) — M3: Framework adapters
 
-**Removes the limitation:** the oracle depends entirely on a specification, and a
-specification that marks everything protected (or nothing) carries no information — which
-AppSec Framework currently grades and reports, but cannot improve.
+**Removes the limitation:** the oracle depended entirely on a specification, and
+a specification that marks everything protected — or nothing — carries no
+information.
 
-| Task | Acceptance criteria |
-|---|---|
-| Adapter JSON contract + schema | Versioned, documented, and validated before it can influence a plan. |
-| Golden conformance suite | An adapter author can validate against fixtures without reading the Go core. |
-| Laravel adapter | Reads routes, middleware, gates and policies via `artisan`. |
-| NestJS adapter | Reads the permission catalog and guard metadata via a TypeScript probe. |
-| Provenance merging | Adapter-derived expectations are `inferred` until corroborated at runtime; conflicts with the specification are reported, not silently resolved. |
+| Task | Acceptance criteria | Delivered |
+|---|---|---|
+| Adapter JSON contract + schema | Versioned, documented, and validated before it can influence a plan. | ✅ `appsec.adapter/v1alpha1`, `schemas/appsec.adapter.schema.json`, [an author guide](adapters/contract.md), and a conformance suite whose every case states why acceptance would be unsafe. |
+| Golden conformance suite | An adapter author can validate against fixtures without reading the Go core. | ✅ `internal/adapter/validate_test.go`, plus a schema/parser agreement test so the two cannot drift. |
+| Laravel adapter | Reads routes, middleware, gates and policies via `artisan`. | ⚠️ **Static tier only.** Routes and middleware groups are read from source; gates are detected as controls in controller actions. `artisan` is **not** used — see below. |
+| NestJS adapter | Reads the permission catalog and guard metadata via a TypeScript probe. | ⚠️ **Static tier only.** Controllers, the global guard, `@Public()` and authorization decorators are read from source. No module is imported — see below. |
+| Provenance merging | Adapter-derived expectations are `inferred` until corroborated at runtime; conflicts with the specification are reported, not silently resolved. | ✅ Agreement corroborates, disagreement withdraws the expectation from **both** sources and is reported. No extraction method reaches `observed` or `verified`. |
 
-**Security considerations:** adapters are opt-in per run, never auto-discovered from a
-target repository, invoked with explicit argument vectors, and their output is treated as
-hostile.
+### The execution strategy in the criteria is unsafe as written, and was changed
+
+The Laravel and NestJS criteria above name `artisan` and a TypeScript probe.
+Implementing M3 established what those actually do, and neither can be the
+default:
+
+- `artisan` requires `vendor/autoload.php` and boots every service provider
+  (`laravel-api/artisan:9-13`). A fresh clone has no `vendor/`, and
+  `composer install` runs `@php artisan package:discover` from its
+  `post-autoload-dump` hook — so installing dependencies is itself booting the
+  application.
+- `nestjs-api/src/main.ts` calls `startTelemetry()` at **import time**, patching
+  `http`, `pg` and `ioredis`. Importing a module to read its metadata opens that
+  machinery. A fresh clone has no `node_modules` either.
+
+So framework-native introspection is arbitrary code execution against a
+repository nobody vouched for, preceded by dependency installation that is more
+of the same. It is now gated behind an explicit `adapters.trust:
+execute-target-code`, and **M3 ships the static tier only**. Full reasoning in
+[ADR-0014](adr/0014-adapter-contract-and-extraction-trust.md), which refines
+ADR-0002's tier ordering rather than replacing it.
+
+### Why this milestone is partial
+
+The trust gate for tier 1 is built and tested; no tier-1 adapter ships. Writing
+one means either a PHP or Node program whose own dependencies this project's
+Go-only CI cannot install, or shipping security-critical code that CI never
+exercises. Untested code in that position is worse than absent code.
+
+What this costs: facts that genuinely need the runtime are not available.
+`laravel-api` builds its gate table in a provider loop over an enum, so its
+permission catalog cannot be enumerated without executing it. What it buys: the
+shipped adapters run against a fresh clone with no install step, execute
+nothing, and are covered by deterministic CI.
+
+**Verified against the real reference applications:** 80 facts from
+`laravel-api`, 168 from `nestjs-api`, no dependencies and no code execution, and
+one operation moved from `untested{no_oracle}` to an executed check that found a
+real anonymous bypass. Details and limitations in
+[docs/evaluation/adapters-on-reference-applications.md](evaluation/adapters-on-reference-applications.md).
+
+**Security considerations:** adapters are opt-in per run, never auto-discovered
+from a target repository, invoked with explicit argument vectors, given an
+environment built from nothing, and their output is treated as hostile input.
+See threat model T-18.
 
 ---
 
-## M4 — External engines
+## Next — M4: External engines
 
 **Removes the limitation:** whole weakness classes are listed in `classesNotAssessed` with
 nothing able to address them.

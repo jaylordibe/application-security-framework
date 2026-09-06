@@ -79,13 +79,14 @@ implementation genuinely exists or is imminent.
 | `internal/redact` | secret redaction at capture time (zero-dependency leaf) | ✅ |
 | `internal/identity` | principals, credential sources, authenticated controls, liveness | ✅ |
 | `internal/resource` | resource fixtures, ownership expectation, safe parameter binding | ✅ |
+| `internal/adapter` | adapter contract, hostile-output validation, execution boundary, provenance merging | ✅ |
+| `adapters/*` | out-of-process framework probes (Laravel, NestJS) | ✅ static tier (ADR-0014) |
 | `internal/openapi` | specification ingestion → operations + declared expectations | ✅ |
 | `internal/outcome` | response → access outcome classification | ✅ |
 | `internal/check` | check implementations | ✅ |
 | `internal/engine` | assessment lifecycle: plan, execute, record; owns the `Check` interface | ✅ |
 | `internal/store` | run persistence, evidence storage, permissions | ✅ |
 | `internal/report` | JSON and SARIF renderers; owns the versioned wire DTOs | ✅ |
-| `adapters/*` | out-of-process framework probes | ⬜ designed (ADR-0002) |
 | `engines/*` | external scanner integrations | ⬜ designed (ADR-0005) |
 
 **Status is ⬜ until code for that package is merged with tests.** A project whose thesis
@@ -374,7 +375,101 @@ fixtures are deferred to environment provisioning.
 
 ---
 
-## 10. Failure semantics
+## 10. Framework adapters (M3)
+
+### What crosses the boundary
+
+```
+application source ──▶ adapter ──▶ versioned JSON ──▶ hostile-input validation
+                                                              │
+                                                              ▼
+                                                   normalized facts
+                                                              │
+                                                              ▼
+                                            provenance merging with OpenAPI
+                                                              │
+                                                              ▼
+                                                          oracle
+                                                              │
+                                                              ▼
+                                              runtime checks produce evidence
+```
+
+The core consumes facts, never constructs. It has no idea what a middleware
+group or a guard is, and a test asserts that mechanically over the parsed AST
+rather than by review — the first `if framework == "laravel"` always looks like
+a small pragmatic exception.
+
+The reason is concrete rather than aesthetic. In Laravel, a route with no
+authentication middleware is unprotected. In NestJS under a global `APP_GUARD`,
+an operation with no decorator is protected. **The same syntactic absence means
+opposite things.** A core that learned either rule would be wrong about the
+other, so both rules live in their adapters and the contract carries only the
+conclusion.
+
+### Extraction tiers and what they earn
+
+| Method | Executes target code | Provenance |
+|---|---|---|
+| `framework-native` | **yes** | `declared` |
+| `static-ast` | no | `inferred` |
+| `static-lexical` | no | `inferred` |
+
+The adapter states the method; the **core** maps it onto provenance. There is no
+confidence field an adapter can set, so provenance spoofing requires
+misreporting what was done — which appears in the report. No method reaches
+`observed` or `verified`: reading source never establishes what a request does.
+
+Framework-native extraction is refused unless the operator sets
+`adapters.trust: execute-target-code`, because asking a framework to describe
+itself means booting it. M3 ships only the static tier
+([ADR-0014](adr/0014-adapter-contract-and-extraction-trust.md)).
+
+### Merging
+
+| Specification says | Adapter says | Result |
+|---|---|---|
+| nothing | protected / public | **new** — the operation gains an expectation it did not have |
+| protected | protected | corroborated |
+| public | protected | **conflict** — expectation withdrawn from both, reported |
+| protected | public | **conflict** — expectation withdrawn from both, reported |
+| anything | `unknown` | recorded, nothing added |
+
+Nothing overwrites anything. Choosing between two of the application's own
+artefacts with no evidence would be a guess, and which one won would depend on
+the order sources were read in. An operation only an adapter knows about is
+recorded and **not** tested: that is undocumented-surface discovery, which is a
+different milestone.
+
+### Facts are expectations, never evidence
+
+An adapter saying an operation is protected does not establish that it is. It
+supplies the oracle; the runtime checks supply the evidence. So an
+adapter-derived expectation can make an operation *testable* — moving it from
+`untested{no_oracle}` to an executed check — and the finding that results stays
+**suspected**, because a static reading proves nothing about what a request
+would do.
+
+That distinction is the reason this project exists, and the report states it in
+words rather than leaving it to be inferred.
+
+### Containment
+
+Adapters are opt-in, never discovered from a target repository, and run as
+subprocesses with an explicit argument vector and no shell. The environment is
+built from nothing — not even `PATH` — and this tool's own identity credentials
+can never be forwarded. Output is bounded, both pipes are drained concurrently,
+and a cancelled adapter's process group is killed. Its document is size-bounded
+before parsing, version-checked before interpretation, and validated fact by
+fact. See threat model T-18.
+
+A failed adapter contributes nothing and leaves the oracle exactly as it was,
+saying so: *this does not mean the application has no controls; it means none
+were read.*
+
+---
+
+## 11. Failure semantics
 
 - An engine crash is an engine crash. It becomes a blocked coverage entry and a recorded
   tool failure — never an absence of findings.
@@ -384,7 +479,7 @@ fixtures are deferred to environment provisioning.
 
 ---
 
-## 11. What is intentionally missing
+## 12. What is intentionally missing
 
 Discovery beyond specification ingestion; any external engine integration; identity and
 authentication providers; the adversarial authorization engine; tenancy; workflows;

@@ -13,6 +13,7 @@ application's own metadata, observes what it *actually* does, and reports the di
 
 **Status: early foundation (v0.x).** Two checks are implemented: declared authentication
 with an authenticated control behind it (M1), and cross-owner resource access (M2).
+Framework adapters supply expectations the specification cannot express (M3, static tier).
 Schemas may change before 1.0. See
 [What AppSec Framework does not do yet](#what-appsec-framework-does-not-do-yet) before
 relying on it. It has not been evaluated for precision or recall against a corpus
@@ -95,6 +96,26 @@ appsec doctor    # what is installed, and what each missing piece would unlock
 appsec scan http://localhost:3000 --spec ./openapi.json
 appsec scan https://staging.example.com --spec-url https://staging.example.com/openapi.json
 ```
+
+### Framework adapters
+
+```yaml
+adapters:
+  sourceRoot: ../my-application
+  use:
+    - name: laravel
+      path: ./dist/appsec-adapter-laravel
+```
+
+The shipped adapters read your source and **execute nothing** — no `artisan`, no module
+imports, no `composer install`, no `npm install`, no project scripts. That matters more
+than it sounds: `artisan` boots every service provider, importing a NestJS module runs it,
+and installing dependencies runs their lifecycle hooks. Doing any of that against a
+repository is a decision, so it sits behind `adapters.trust: execute-target-code` and no
+adapter shipped here needs it.
+
+Write your own in any language: [the contract](docs/adapters/contract.md) is JSON on
+stdout with a JSON Schema and a conformance suite.
 
 ### Identities and owned resources
 
@@ -212,6 +233,19 @@ different only ever leaves it suspected. A finding is raised by an anonymous suc
 never by an authenticated failure, so forgetting to set an environment variable cannot turn
 a vulnerable application green — it produces a blocked identity row and a named gap.
 
+**An adapter fact is an expectation, never evidence.** Your framework knows things OpenAPI
+cannot express — which routes are behind authentication middleware, which have an
+authorization control. An adapter reads that and hands it to the oracle, which can make an
+operation testable that had nothing to test it against. It does **not** establish that the
+control works: that is what the requests are for. So an adapter-derived expectation
+produces a *suspected* finding a human reads, never a confirmed one.
+
+**Two sources that disagree are a finding about your application.** If OpenAPI says an
+operation is public and the framework says it is protected, AppSec Framework does not pick
+one. It withdraws the expectation from both and reports the disagreement — choosing a
+winner with no evidence would be a guess, and which one won would depend on the order the
+sources happened to be read in.
+
 **A cross-owner result needs three requests, not two.** The owner reads the resource, the
 non-owner probes it, and the owner reads it again. The re-check is not padding: without
 it, a record deleted between the first two requests makes the non-owner's 404 look like an
@@ -280,8 +314,12 @@ Being specific about this is part of the product.
 - **No engine integrations.** ZAP, Nuclei, Semgrep and Hadrian are designed as optional
   subprocesses ([ADR-0005](docs/adr/0005-external-engines-are-subprocesses.md)) but none is
   implemented. `appsec doctor` reports what is on your PATH.
-- **No framework adapters.** The NestJS and Laravel probes are designed
-  ([ADR-0002](docs/adr/0002-out-of-process-adapters.md)), not built.
+- **Framework adapters read source; they do not ask the framework.** The Laravel and
+  NestJS adapters never execute your application, which means they cannot resolve anything
+  dynamic — a gate table built in a provider loop, a guard whose semantics they do not
+  recognise. They say so, per fact and per run. Framework-native introspection is designed
+  and gated but not shipped
+  ([ADR-0014](docs/adr/0014-adapter-contract-and-extraction-trust.md)).
 - **No undocumented-route discovery.** The attack surface comes from the specification, so
   routes absent from it are invisible — not merely untested. Every report says this.
 - **Only bearer and header API-key authentication.** No OAuth2 flows, no OIDC, no browser
@@ -340,6 +378,8 @@ authentication bypass — a silent pass is the worst possible default for a secu
 | [Reference applications](docs/research/reference-applications.md) | the evidence behind the design |
 | [Threat model](docs/security/threat-model.md) | this framework's own attack surface |
 | [Cross-owner integration](docs/evaluation/cross-owner-integration.md) | running M2 against the two reference APIs |
+| [Writing an adapter](docs/adapters/contract.md) | the contract, in any language |
+| [Adapters on real applications](docs/evaluation/adapters-on-reference-applications.md) | what they extract, and what they cannot |
 | [ADRs](docs/adr/) | consequential decisions and their alternatives |
 | [Roadmap](docs/roadmap.md) | what is next, and what is explicitly out |
 

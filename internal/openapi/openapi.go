@@ -508,6 +508,15 @@ func resolveBase(servers []server, baseURL string, res *Result) string {
 }
 
 // gradeFidelity assesses how much information the declared security carries.
+// Grade assesses how much information a set of operations' declared security
+// carries.
+//
+// It is exported because the surface can change after parsing: framework
+// adapters may give operations an expectation the specification did not carry,
+// and a fidelity grade describing the pre-merge surface would misdescribe the
+// oracle the run actually used.
+func Grade(ops []model.Operation) Fidelity { return gradeFidelity(ops) }
+
 func gradeFidelity(ops []model.Operation) Fidelity {
 	f := Fidelity{Total: len(ops), Provenance: model.ProvenanceDeclared}
 	for _, op := range ops {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jaylordibe/application-security-framework/internal/adapter"
 	"github.com/jaylordibe/application-security-framework/internal/check"
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
@@ -159,6 +160,7 @@ func planOwnership(opts Options, lg *ledger) []ownershipUnit {
 				plan := check.ResourcePlan{
 					Operation: op, Fixture: f, URL: binding.URL,
 					Owner: owner, Attacker: attacker, Mutate: mutating,
+					FrameworkControl: frameworkControlFor(opts.Surface, op.ID),
 				}
 				if mutating {
 					if f.Mutation == nil {
@@ -407,4 +409,27 @@ func qualifyOwnershipClasses(classes []string, o OwnershipSummary) []string {
 		out = append(out, qualified)
 	}
 	return out
+}
+
+// frameworkControlFor returns the authorization control a framework adapter
+// found on an operation, if one did.
+//
+// Only a positive finding is carried through. An adapter reporting "absent"
+// says it saw no control, which is not the same as there being none — the
+// adapter's own limitations say why — and passing that along would invite a
+// reader to treat a blind spot as a fact.
+func frameworkControlFor(surface Surface, operationID string) string {
+	for _, m := range surface.AdapterMerges {
+		if m.OperationID != operationID || m.Kind != adapter.KindAuthorization {
+			continue
+		}
+		if m.AdapterValue != adapter.AuthorizationPresent {
+			continue
+		}
+		if m.Evidence.Detail != "" {
+			return m.Evidence.Detail + " (reported by adapter " + m.Adapter + ")"
+		}
+		return "an authorization control reported by adapter " + m.Adapter
+	}
+	return ""
 }

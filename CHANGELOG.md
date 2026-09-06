@@ -106,6 +106,44 @@ consumer can detect a change rather than misparse.
   redirects, credential isolation under `-race`, and vulnerable/secure/fake-success
   mutation.
 
+### Added — M3: framework adapters (static tier)
+
+- `internal/adapter`: a versioned, schema-validated contract (`appsec.adapter/v1alpha1`) in
+  which adapters report *conclusions* — `operation.authentication`,
+  `operation.authorization`, `operation.ownership` — rather than framework constructs. The
+  core contains no middleware, guard, gate or decorator, asserted mechanically over its
+  parsed AST rather than by review.
+- Adapter output is treated as hostile input: size-bounded before parsing, version-checked
+  before interpretation, strictly decoded, and validated fact by fact. An unknown contract
+  version is refused rather than interpreted. An adapter that contradicts itself about one
+  subject has **both** assertions withdrawn.
+- An execution boundary with an explicit argument vector and no shell, an environment built
+  from nothing — not even `PATH`, and never this tool's own credentials — bounded and
+  concurrently drained pipes, a timeout, and process-group cleanup.
+- Provenance merging. Agreement corroborates, disagreement withdraws the expectation from
+  both sources and is reported, and an adapter-only operation is recorded but not tested.
+  The adapter states its extraction *method* and the core decides what that is worth; no
+  method reaches `observed` or `verified`.
+- Reference adapters for Laravel and NestJS that read source and execute nothing, with
+  golden and negative fixtures. Both reach the same normalized conclusions from opposite
+  syntax: a Laravel route with no auth middleware is unprotected, while a NestJS operation
+  with no decorator under a global guard is protected.
+- An `adapters` section in the JSON report and SARIF run properties, stating in words that
+  a fact is an expectation and not evidence that a control works.
+- `docs/adapters/contract.md` for adapter authors in any language, plus
+  `schemas/appsec.adapter.schema.json` and a test asserting the schema and the parser
+  cannot drift apart.
+
+### Corrected — M3
+
+- The M3 acceptance criteria named `artisan` and a TypeScript probe. Both execute the
+  inspected repository's code and both require installing dependencies first, which is
+  itself code execution: `laravel-api`'s `composer.json` runs `@php artisan
+  package:discover` on `post-autoload-dump`, and `nestjs-api/src/main.ts` calls
+  `startTelemetry()` at import time. Framework-native extraction is now gated behind an
+  explicit trust mode and M3 ships the static tier only. The milestone is marked partial
+  rather than claiming a tier it does not implement.
+
 ### Corrected
 
 - The M2 acceptance criterion "owner `200` + other `404` is a **proven** denial" was not

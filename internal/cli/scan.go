@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/jaylordibe/application-security-framework/internal/adapter"
 	"github.com/jaylordibe/application-security-framework/internal/check"
 	"github.com/jaylordibe/application-security-framework/internal/config"
 	"github.com/jaylordibe/application-security-framework/internal/engine"
@@ -192,6 +193,35 @@ func runScan(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) e
 	surface, err := discover(ctx, cfg, client, now)
 	if err != nil {
 		return fail(ExitAborted, "discovery failed: %v", err)
+	}
+
+	// Framework adapters run before planning, because their whole purpose is to
+	// change what the plan knows. They are opt-in: nothing here executes unless
+	// the operator named an adapter.
+	var merged adapter.MergeResult
+	if specs := cfg.AdapterSpecs(); len(specs) > 0 {
+		collected := adapter.Collect(ctx, specs, adapter.Options{
+			Trust: cfg.AdapterTrust(),
+			// This tool's own identity credentials can never reach an adapter,
+			// whatever the configuration asks for.
+			ForbiddenEnv: cfg.CredentialEnvNames(),
+			Now:          now,
+		})
+		for _, f := range collected.Failures {
+			fmt.Fprintf(stderr, "appsec: %s\n", f)
+		}
+		merged = adapter.MergeInto(surface.Operations, collected.Documents, func() model.Source {
+			return model.Source{ObservedAt: now()}
+		})
+		surface.Operations = merged.Operations
+		surface.AdapterFailures = collected.Failures
+		surface.AdapterLimitations = append(merged.Limitations, collected.Limitations...)
+		surface.AdapterMerges = merged.Merges
+		surface.AdapterUnmatched = merged.UnmatchedOperations
+		// Re-grade the oracle: adapter facts may have given operations an
+		// expectation the specification did not carry, and the grade must
+		// reflect the surface actually being assessed.
+		surface.Fidelity = openapi.Grade(surface.Operations)
 	}
 
 	// The run directory is created before the assessment starts, so evidence can

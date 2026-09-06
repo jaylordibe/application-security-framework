@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jaylordibe/application-security-framework/internal/adapter"
 	"github.com/jaylordibe/application-security-framework/internal/check"
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
@@ -53,6 +54,15 @@ type Surface struct {
 	Operations   []model.Operation
 	ExternalRefs []string
 	Warnings     []string
+
+	// Adapter* record what framework adapters contributed, and — at least as
+	// importantly — what they could not. An adapter that failed found no
+	// controls, and an application with no controls also has no controls; the
+	// two must never read the same.
+	AdapterMerges      []adapter.Merge
+	AdapterFailures    []string
+	AdapterLimitations []string
+	AdapterUnmatched   []string
 }
 
 // Environment records operator-stated differences from production.

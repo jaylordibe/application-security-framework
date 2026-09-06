@@ -7,12 +7,14 @@ package report
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/jaylordibe/application-security-framework/internal/adapter"
 	"github.com/jaylordibe/application-security-framework/internal/engine"
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
@@ -44,9 +46,12 @@ type Document struct {
 	Identities []Identity `json:"identities"`
 	// Ownership accounts for the cross-owner boundaries this run exercised and
 	// states plainly what they do not cover.
-	Ownership Ownership       `json:"ownership"`
-	Findings  []Finding       `json:"findings"`
-	Coverage  []CoverageEntry `json:"coverage"`
+	Ownership Ownership `json:"ownership"`
+	// Adapters records what framework adapters contributed and what they could
+	// not determine. It carries source locations, never source contents.
+	Adapters AdapterAccount  `json:"adapters"`
+	Findings []Finding       `json:"findings"`
+	Coverage []CoverageEntry `json:"coverage"`
 
 	ToolFailures       []string `json:"toolFailures"`
 	OutOfScopeHosts    []string `json:"outOfScopeHosts"`
@@ -141,6 +146,46 @@ type Ownership struct {
 	// Tested lists each exercised tuple, so a reader can see the actual extent
 	// rather than inferring it from a count.
 	Tested []string `json:"tested"`
+}
+
+// AdapterAccount is the framework-adapter section of a report.
+//
+// It exists so a reader can tell how a security expectation was arrived at. A
+// static inference drawn from route files and a runtime answer from the
+// framework itself are not the same claim, and neither is evidence that a
+// control actually works — that is what the runtime checks establish.
+type AdapterAccount struct {
+	// Statement says in words what adapter facts do and do not mean.
+	Statement string `json:"statement"`
+	// Corroborated, Added and Conflicting count how adapter facts related to
+	// what the specification already said.
+	Corroborated int `json:"corroborated"`
+	Added        int `json:"added"`
+	Conflicting  int `json:"conflicting"`
+	Undetermined int `json:"undetermined"`
+	// Conflicts describe each disagreement between sources, in full. A
+	// disagreement between two of the application's own artefacts is a finding
+	// about the application, not a detail to summarise away.
+	Conflicts []AdapterConflict `json:"conflicts,omitempty"`
+	// Failures name adapters that produced nothing usable.
+	Failures []string `json:"failures,omitempty"`
+	// Limitations are what the adapters said they could not determine.
+	Limitations []string `json:"limitations,omitempty"`
+	// UnmatchedOperations are routes an adapter reported that the specification
+	// does not contain. They are recorded and not tested.
+	UnmatchedOperations []string `json:"operationsOutsideSpecification,omitempty"`
+}
+
+// AdapterConflict is one disagreement between sources about one operation.
+type AdapterConflict struct {
+	OperationID string `json:"operationId"`
+	Kind        string `json:"kind"`
+	Adapter     string `json:"adapter"`
+	// Provenance is the grade the adapter's extraction method earns.
+	Provenance string `json:"provenance"`
+	Detail     string `json:"detail"`
+	// Source locates the application code behind the adapter's claim.
+	Source string `json:"source,omitempty"`
 }
 
 // Surface describes what was discovered and how much it can be trusted.
@@ -333,6 +378,7 @@ func Build(res engine.Result, version string) Document {
 		})
 	}
 
+	doc.Adapters = buildAdapterAccount(res.Surface)
 	doc.Ownership = Ownership{
 		Statement:          res.Ownership.Statement,
 		BoundariesVerified: res.Ownership.Verified,
@@ -407,6 +453,62 @@ func buildAssurance(res engine.Result) Assurance {
 			"attack surface. It does not establish that the target is secure. Absence of findings " +
 			"here means only that these checks, against these operations, produced none — see " +
 			"classesNotAssessed for weakness classes nothing in this run examined."
+	}
+	return a
+}
+
+// buildAdapterAccount summarises what adapters contributed.
+func buildAdapterAccount(s engine.Surface) AdapterAccount {
+	a := AdapterAccount{
+		Failures:            nonNil(s.AdapterFailures),
+		Limitations:         nonNil(s.AdapterLimitations),
+		UnmatchedOperations: nonNil(s.AdapterUnmatched),
+	}
+	for _, m := range s.AdapterMerges {
+		switch m.Agreement {
+		case adapter.AgreementCorroborated:
+			a.Corroborated++
+		case adapter.AgreementNew:
+			a.Added++
+		case adapter.AgreementUnknown:
+			a.Undetermined++
+		case adapter.AgreementConflict:
+			a.Conflicting++
+			c := AdapterConflict{
+				OperationID: m.OperationID,
+				Kind:        string(m.Kind),
+				Adapter:     m.Adapter,
+				Provenance:  string(m.Provenance),
+				Detail:      m.Detail,
+			}
+			if m.Evidence.File != "" {
+				c.Source = m.Evidence.File
+				if m.Evidence.Line > 0 {
+					c.Source = fmt.Sprintf("%s:%d", m.Evidence.File, m.Evidence.Line)
+				}
+			}
+			a.Conflicts = append(a.Conflicts, c)
+		}
+	}
+
+	switch {
+	case len(s.AdapterMerges) == 0 && len(s.AdapterFailures) == 0:
+		a.Statement = "No framework adapter ran, so every expectation in this report comes from " +
+			"the specification or from configuration."
+	case len(s.AdapterFailures) > 0 && len(s.AdapterMerges) == 0:
+		a.Statement = "Every configured framework adapter failed, so no framework-derived " +
+			"expectation was added. This does not mean the application has no authorization " +
+			"controls; it means none were read."
+	case a.Conflicting > 0:
+		a.Statement = fmt.Sprintf("A framework adapter and the specification disagree about %d "+
+			"operation(s). Neither is used as an oracle for those, because choosing between two "+
+			"of the application's own artefacts with no evidence would be a guess. Adapter facts "+
+			"are expectations about what should happen, never evidence that a control works.",
+			a.Conflicting)
+	default:
+		a.Statement = "Framework adapters contributed expectations about what the application " +
+			"should enforce. An adapter fact is an expectation, not evidence: whether a control " +
+			"actually works is established by the runtime checks, not by reading source."
 	}
 	return a
 }

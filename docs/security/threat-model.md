@@ -575,6 +575,116 @@ recognised as one. Prefer fixtures whose identifiers are opaque row ids.
   own record. The resource-identity discriminator catches the common case by
   comparing values at matching paths; it is not a proof against every scheme.
 
+### T-18 Framework adapters and the repository they inspect
+
+M3 introduced two new trust boundaries at once: a third-party executable AppSec
+runs, and a source repository it reads. Both are untrusted, and the repository
+should be assumed to be actively hostile — it is, after all, the thing being
+audited.
+
+**The inspected repository is data, never code.**
+
+- The shipped adapters read files and execute nothing. That is the entire
+  security argument for the static tier and it is kept literally true.
+- Framework-native introspection *does* execute the target's code, so it is
+  refused unless the operator sets `adapters.trust: execute-target-code`.
+  Evidence for why this matters: `artisan` boots every service provider
+  (`laravel-api/artisan:9-13`), and `nestjs-api/src/main.ts` runs
+  `startTelemetry()` at import time, patching `http`, `pg` and `ioredis`.
+  **TESTED** (`adapter.TestTargetCodeExecutionRequiresExplicitTrust`).
+- **Dependencies are never installed.** `composer install` on that same
+  repository runs `@php artisan package:discover` from `post-autoload-dump`, so
+  installing is itself booting. No adapter runs a project script, a package
+  manager or a Makefile.
+- Adapters are **opt-in and never discovered**. A manifest in a checkout cannot
+  cause a program to run.
+- Walking is bounded: symlinks are not followed, `vendor/` and `node_modules/`
+  are skipped, directory depth, file count, file size and line length are all
+  capped, and invalid UTF-8 is repaired rather than propagated.
+
+**The adapter process is contained.**
+
+- Explicit executable, explicit argument vector, no shell anywhere.
+- **The environment is built from nothing.** A CI environment holds cloud
+  credentials, registry tokens and this tool's own identity credentials; none of
+  it reaches an adapter. An operator may forward a named variable, and this
+  tool's identity credentials are refused even then. `PATH` is deliberately
+  absent, because an adapter is executed by explicit path. **TESTED**
+  (`adapter.TestAdapterEnvironmentIsBuiltFromNothing`, which asserts on the
+  adapter's own view of its environment).
+- Timeout, `WaitDelay`, and a process group so a cancelled adapter's children
+  are killed rather than orphaned. **TESTED**
+  (`adapter.TestAdapterTimeoutIsEnforced`, `TestAdapterRespectsCancellation`).
+- stdout and stderr are bounded and **drained concurrently**: reading one to
+  completion first deadlocks as soon as the other fills, which a hostile adapter
+  can arrange deliberately. **TESTED** (`adapter.TestStderrIsBounded`,
+  `TestBothPipesAreDrainedConcurrently`).
+- Truncated stdout is **refused rather than parsed**. A partial document reports
+  fewer controls than the adapter found.
+
+**Adapter output is hostile input.**
+
+- Size-bounded before parsing, version-checked before interpretation, strictly
+  decoded, trailing content refused. An unknown contract version is refused
+  rather than interpreted, because a later contract may give an existing field a
+  new meaning. **TESTED** (`adapter.TestDocumentsAreRejectedWholesale`).
+- Operation paths carrying a scheme, authority, query, fragment or
+  parent-directory reference are dropped: a fact about another origin must not
+  enter this target's oracle. Evidence paths that are absolute, drive-lettered
+  or escaping are dropped rather than repaired. **TESTED**
+  (`adapter.TestIndividualFactsAreDroppedAndCounted`).
+- Every string is sanitized and bounded. Adapter strings reach terminals, JSON,
+  SARIF and — the roadmap says so explicitly — future model prompts, so control
+  characters that rewrite a terminal and unbounded lengths that flood one are
+  removed at the boundary. **TESTED** (`adapter.TestHostileStringsAreSanitized`).
+- **Provenance cannot be spoofed directly**: there is no confidence field to
+  set. An adapter declares a *method* and the core grades it, so lying requires
+  misreporting what was done, which appears in the report. **TESTED**
+  (`adapter.TestProvenanceIsDerivedFromMethodNotClaimed`,
+  `TestSchemaHasNoProvenanceField`).
+- An adapter that **misnames itself** is refused, so a document cannot be
+  attributed to an adapter that did not produce it.
+- An adapter that **contradicts itself** about one subject has both assertions
+  withdrawn. Keeping the first makes the outcome depend on document order;
+  keeping the last lets a malicious adapter overwrite by appending. **TESTED**
+  (`adapter.TestContradictoryFactsWithdrawBoth`).
+
+**A failure must never look like an absence.**
+
+- A crashed, timed-out, malformed or unauthorised adapter contributes nothing
+  and leaves the oracle exactly as it was, with a stated limitation saying "this
+  does not mean the application has no controls; it means none were read".
+  **TESTED** (`adapter.TestCollectReportsFailuresAsLimitations`,
+  `evals.TestM3_AdapterFailureDoesNotImproveTheReport`).
+- Conflicting sources withdraw the expectation rather than picking a winner, so
+  a hostile adapter cannot *remove* an operation from testing by asserting the
+  opposite of the specification — it can only make the disagreement visible.
+
+**Residual risk, stated rather than mitigated.**
+
+- **A lexical adapter can be wrong.** Unusual source will be misread. Every fact
+  carries a file and line so a human can check, and a wrong fact yields a
+  *suspected* finding somebody reads rather than a confirmed one. It cannot
+  produce a confirmed finding on its own: confirmation needs runtime evidence.
+- **An adapter binary is trusted to the extent the operator trusts it.** AppSec
+  bounds what it can consume and what environment it runs in; it does not
+  sandbox the process. An adapter is chosen deliberately, like a compiler.
+- **Adapter binary substitution is not detected.** There is no signature or
+  checksum on the executable. An attacker who can replace a binary on the
+  operator's machine already has the operator's machine.
+- **Windows has no process groups** in the POSIX sense, so a grandchild spawned
+  by an adapter may outlive a cancellation there. The adapter itself is still
+  killed.
+- **Source locations are paths from the inspected repository.** They are
+  validated as relative and non-escaping, and they do reach reports — a report
+  therefore discloses the layout of the inspected source, though never its
+  contents.
+- **Facts are the application's expectations, not its behaviour.** An adapter
+  saying an operation is protected is not evidence that it is. Treating it as
+  such is the single most likely way this feature could mislead, which is why
+  the report's adapter section says so in words and why no extraction method
+  maps to observed or verified provenance.
+
 ## 3. Residual risk accepted at this stage
 
 Stated plainly rather than left for a reader to discover.

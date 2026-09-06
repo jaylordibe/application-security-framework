@@ -36,6 +36,15 @@ type ResourcePlan struct {
 	Owner *identity.Control
 	// Attacker is the identity that must not be able to reach it.
 	Attacker *identity.Control
+	// FrameworkControl describes an authorization control a framework adapter
+	// found on this operation, or is empty when no adapter said anything.
+	//
+	// It never decides anything. A framework declaring a control is an
+	// expectation; whether the control works is what the probe establishes. What
+	// it does is sharpen the finding: a non-owner reaching a resource the
+	// application itself marks as controlled is a control that does not work,
+	// which is a different and more actionable statement than an absent one.
+	FrameworkControl string
 	// ReadOperation and ReadURL address the same resource for reading. They are
 	// set only for mutation plans, where the state change has to be observed
 	// independently of the response that claimed it.
@@ -294,6 +303,18 @@ func (c CrossOwner) judgeUnauthorizedRead(
 		Name: "same-resource-as-owner-received", Passed: ev.Proven, Detail: ev.Reason,
 	})
 
+	if p.FrameworkControl != "" {
+		// Corroboration, not proof. The step is recorded whatever the outcome,
+		// because "the application says it controls this" is context a reader
+		// needs either way.
+		steps = append(steps, model.VerificationStep{
+			Name: "framework-declares-an-authorization-control", Passed: true,
+			Detail: "a framework adapter found that this operation is subject to " +
+				p.FrameworkControl + ". That is an expectation the application states about " +
+				"itself, not evidence that it is enforced — which is what this check tests",
+		})
+	}
+
 	if cache := cacheFingerprint(attackerEx.Response); cache != "" {
 		steps = append(steps, model.VerificationStep{
 			Name: "not-served-from-cache", Passed: false, Detail: cache,
@@ -339,8 +360,8 @@ func (c CrossOwner) judgeUnauthorizedRead(
 		Expected: fmt.Sprintf("fixture %q is owned by %s and is declared as not accessible to other "+
 			"identities, so %s should have been refused",
 			p.Fixture.ID, p.Owner.ID(), p.Attacker.ID()),
-		Actual: fmt.Sprintf("%s read a resource owned by %s. %s",
-			p.Attacker.ID(), p.Owner.ID(), describeEvidence(eq, ev)),
+		Actual: fmt.Sprintf("%s read a resource owned by %s. %s%s",
+			p.Attacker.ID(), p.Owner.ID(), describeEvidence(eq, ev), frameworkNote(p)),
 		Verification: model.VerificationRecord{
 			Strategy:    "owner-control-then-cross-owner-probe-then-owner-recheck",
 			Steps:       steps,
@@ -420,4 +441,18 @@ func mutationBody(values map[string]any) ([]byte, error) {
 	}
 	b.WriteString("}")
 	return []byte(b.String()), nil
+}
+
+// frameworkNote adds the application's own declared control to a finding.
+//
+// It sharpens rather than decides. An operation the framework marks as
+// controlled, which a non-owner nonetheless reached, is a control that does not
+// work — a more actionable finding than one where no control was ever declared,
+// and a harder one to dismiss as intended behaviour.
+func frameworkNote(p ResourcePlan) string {
+	if p.FrameworkControl == "" {
+		return ""
+	}
+	return " The application's own framework metadata marks this operation as subject to " +
+		p.FrameworkControl + ", so this is a declared control that is not enforced."
 }

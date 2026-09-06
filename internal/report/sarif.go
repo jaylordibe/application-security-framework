@@ -258,6 +258,10 @@ func WriteSARIF(w io.Writer, doc Document) error {
 				// SARIF cannot say "these boundaries were never tested", and a
 				// consumer reading a clean file must not conclude they were.
 				"ownership": doc.Ownership,
+				// How an expectation was derived travels with the results, so a
+				// SARIF-only consumer is not told that a static inference and a
+				// runtime observation are the same thing.
+				"adapters": doc.Adapters,
 			},
 		}},
 	}

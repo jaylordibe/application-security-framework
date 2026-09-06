@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jaylordibe/application-security-framework/schemas/appsec.adapter.schema.json",
+  "title": "AppSec Framework adapter contract (appsec.adapter/v1alpha1)",
+  "description": "The document a framework adapter writes to stdout. The Go core is the runtime authority and validates more than this schema can express \u2014 duplicate and contradictory facts, path safety, string sanitisation and size budgets. This schema exists so an adapter author in any language can validate output without reading Go, and a conformance test asserts the two agree.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "adapter",
+    "facts"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "appsec.adapter/v1alpha1",
+      "description": "The contract version, not the adapter's version. A version this build does not know is refused rather than interpreted, because a later contract may give an existing field a different meaning."
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "extractionMethod"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "description": "Adapter identifier. Must match the name the core invoked."
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 4096,
+          "description": "The adapter's own version, for the operator's benefit."
+        },
+        "extractionMethod": {
+          "enum": [
+            "framework-native",
+            "static-ast",
+            "static-lexical"
+          ],
+          "description": "How the adapter learned what it reports. The core maps this onto provenance; an adapter cannot state provenance directly. framework-native executes the inspected application's own code and requires explicit operator trust."
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Best-effort description of what was inspected. Never trusted for anything security-relevant.",
+      "properties": {
+        "framework": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "frameworkVersion": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    },
+    "facts": {
+      "type": "array",
+      "maxItems": 20000,
+      "description": "Normalized security facts. Framework constructs are translated by the adapter; the core never learns what a middleware or a guard is.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "operation",
+          "value"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "operation.authentication",
+              "operation.authorization",
+              "operation.ownership"
+            ]
+          },
+          "operation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "method",
+              "path"
+            ],
+            "properties": {
+              "method": {
+                "enum": [
+                  "GET",
+                  "HEAD",
+                  "OPTIONS",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE",
+                  "TRACE",
+                  "CONNECT",
+                  "get",
+                  "head",
+                  "options",
+                  "post",
+                  "put",
+                  "patch",
+                  "delete",
+                  "trace",
+                  "connect"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "description": "Path template with parameters in {braces}. No scheme, authority, query or fragment, and no parent-directory reference: a fact about another origin must not enter this target's oracle."
+              }
+            }
+          },
+          "value": {
+            "enum": [
+              "required",
+              "public",
+              "present",
+              "absent",
+              "owner-scoped",
+              "not-owner-scoped",
+              "unknown"
+            ],
+            "description": "Values are namespaced by kind and the core enforces the pairing. \"unknown\" is available to every kind and is the honest answer whenever an adapter met a construct it could not resolve."
+          },
+          "control": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "Opaque label for the control found, such as a permission name. Never interpreted by the core."
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Where in the application the fact came from. A location, never source contents.",
+            "properties": {
+              "file": {
+                "type": "string",
+                "maxLength": 4096,
+                "description": "Path relative to the inspected root. Absolute or escaping paths are refused."
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            }
+          }
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "string",
+        "maxLength": 4096
+      },
+      "description": "What the adapter could not determine, in its own words. This is how the absence of a fact stays distinguishable from the absence of a control \u2014 without it, an adapter that could not read a construct is indistinguishable from one that found no control there."
+    }
+  }
+}

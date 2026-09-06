@@ -12,9 +12,11 @@ LDFLAGS := -s -w -X github.com/jaylordibe/application-security-framework/interna
 .DEFAULT_GOAL := check
 
 .PHONY: build
-build: ## Build the binary into ./dist
+build: ## Build the binary and the reference adapters into ./dist
 	@mkdir -p $(DIST)
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY) ./cmd/appsec
+	$(GO) build -trimpath -o $(DIST)/$(BINARY)-adapter-laravel ./adapters/laravel
+	$(GO) build -trimpath -o $(DIST)/$(BINARY)-adapter-nestjs ./adapters/nestjs
 
 .PHONY: fmt
 fmt: ## Format all Go source

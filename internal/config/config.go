@@ -17,15 +17,24 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-yaml"
 
+	"github.com/jaylordibe/application-security-framework/internal/adapter"
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/resource"
 	"github.com/jaylordibe/application-security-framework/internal/scope"
 )
+
+// adapterNamePattern constrains an adapter name to a plain identifier.
+var adapterNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// envPattern constrains an environment variable name to the POSIX shape.
+var envPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // MaxConfigBytes bounds a configuration file.
 const MaxConfigBytes = 1 << 20 // 1 MiB
@@ -45,6 +54,7 @@ type Config struct {
 	Assessment  Assessment  `yaml:"assessment"`
 	Identities  []Identity  `yaml:"identities"`
 	Resources   []Resource  `yaml:"resources"`
+	Adapters    Adapters    `yaml:"adapters"`
 	Discovery   Discovery   `yaml:"discovery"`
 	Outcome     Outcome     `yaml:"outcome"`
 	Environment Environment `yaml:"environment"`
@@ -205,6 +215,48 @@ type Resource struct {
 // no gain over naming the two fields you want to change.
 type ResourceMutation struct {
 	Values map[string]any `yaml:"values"`
+}
+
+// Adapters configures framework adapters.
+//
+// Adapters are opt-in and are never discovered from a target repository. A
+// manifest sitting in a checkout must not be able to cause a program to run
+// (ADR-0002).
+type Adapters struct {
+	// SourceRoot is the application source to inspect. Required when any
+	// adapter is configured.
+	SourceRoot string `yaml:"sourceRoot"`
+	// Trust authorises adapters that execute the inspected application's own
+	// code. "none" (the default) permits only adapters that do not.
+	//
+	// This is a separate decision from configuring an adapter because
+	// framework-native introspection is not passive: asking Laravel to list its
+	// routes boots the framework and runs every service provider, and importing
+	// a NestJS module executes it. Neither should happen because somebody added
+	// a line naming an executable.
+	Trust string `yaml:"trust"`
+	// Use lists the adapters to run.
+	Use []AdapterUse `yaml:"use"`
+}
+
+// AdapterUse is one configured adapter.
+type AdapterUse struct {
+	// Name must match the name the adapter reports, so a document cannot be
+	// attributed to an adapter that did not produce it.
+	Name string `yaml:"name"`
+	// Path is the adapter executable. It is executed directly with an explicit
+	// argument vector and never through a shell.
+	Path string `yaml:"path"`
+	// Args are extra arguments passed after --source-root.
+	Args []string `yaml:"args"`
+	// TimeoutSeconds bounds this adapter. Zero uses the default.
+	TimeoutSeconds int `yaml:"timeoutSeconds"`
+	// PassEnv names environment variables to forward. The adapter's environment
+	// is otherwise built from nothing: a CI environment holds cloud
+	// credentials, registry tokens and this tool's own identity credentials,
+	// and none of that belongs in a third-party binary run against an untrusted
+	// repository.
+	PassEnv []string `yaml:"passEnv"`
 }
 
 // Discovery configures how the attack surface is learned.
@@ -408,6 +460,7 @@ func (c *Config) Validate() error {
 		}
 	}
 	problems = append(problems, resource.ValidateAll(c.ResourceFixtures(), known)...)
+	problems = append(problems, c.validateAdapters()...)
 
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "\n  - "))
@@ -446,6 +499,93 @@ func (c Config) IdentityModels() []identity.Identity {
 			}
 		}
 		out = append(out, id)
+	}
+	return out
+}
+
+// validateAdapters checks the adapter configuration.
+func (c Config) validateAdapters() []string {
+	var problems []string
+	if len(c.Adapters.Use) == 0 {
+		if c.Adapters.SourceRoot != "" || c.Adapters.Trust != "" {
+			problems = append(problems, "adapters.sourceRoot and adapters.trust have no effect "+
+				"without adapters.use")
+		}
+		return problems
+	}
+	if c.Adapters.SourceRoot == "" {
+		problems = append(problems, "adapters.sourceRoot is required when an adapter is configured; "+
+			"an adapter must be told what to inspect rather than discovering it")
+	}
+	if t := c.Adapters.Trust; t != "" && !adapter.TrustMode(t).Valid() {
+		problems = append(problems, fmt.Sprintf("adapters.trust %q is not one of none, %s",
+			t, adapter.TrustExecuteTargetCode))
+	}
+	seen := map[string]int{}
+	for i, a := range c.Adapters.Use {
+		path := fmt.Sprintf("adapters.use[%d]", i)
+		switch {
+		case a.Name == "":
+			problems = append(problems, path+".name is required")
+		case !adapterNamePattern.MatchString(a.Name):
+			problems = append(problems, fmt.Sprintf("%s.name %q must be lowercase letters, digits, "+
+				"hyphen or underscore", path, a.Name))
+		default:
+			if first, dup := seen[a.Name]; dup {
+				problems = append(problems, fmt.Sprintf("%s.name %q duplicates adapters.use[%d]",
+					path, a.Name, first))
+			}
+			seen[a.Name] = i
+		}
+		if a.Path == "" {
+			problems = append(problems, path+".path is required; an adapter is executed by explicit "+
+				"path and is never searched for")
+		}
+		if a.TimeoutSeconds < 0 || a.TimeoutSeconds > 900 {
+			problems = append(problems, path+".timeoutSeconds must be between 0 and 900")
+		}
+		for j, e := range a.PassEnv {
+			if !envPattern.MatchString(e) {
+				problems = append(problems, fmt.Sprintf("%s.passEnv[%d] %q is not a valid environment "+
+					"variable name", path, j, e))
+			}
+		}
+	}
+	return problems
+}
+
+// AdapterTrust returns the effective trust mode.
+func (c Config) AdapterTrust() adapter.TrustMode {
+	if c.Adapters.Trust == "" {
+		return adapter.TrustNone
+	}
+	return adapter.TrustMode(c.Adapters.Trust)
+}
+
+// AdapterSpecs maps the configured adapters onto execution specs.
+func (c Config) AdapterSpecs() []adapter.Spec {
+	out := make([]adapter.Spec, 0, len(c.Adapters.Use))
+	for _, a := range c.Adapters.Use {
+		out = append(out, adapter.Spec{
+			Name:       a.Name,
+			Path:       a.Path,
+			Args:       a.Args,
+			SourceRoot: c.Adapters.SourceRoot,
+			Timeout:    time.Duration(a.TimeoutSeconds) * time.Second,
+			PassEnv:    a.PassEnv,
+		})
+	}
+	return out
+}
+
+// CredentialEnvNames returns the environment variables holding this tool's own
+// identity credentials, so they can be kept out of every adapter.
+func (c Config) CredentialEnvNames() []string {
+	var out []string
+	for _, i := range c.Identities {
+		if e := i.Authentication.Credential.Env; e != "" {
+			out = append(out, e)
+		}
 	}
 	return out
 }

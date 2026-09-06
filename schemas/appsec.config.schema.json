@@ -313,6 +313,66 @@
         }
       }
     },
+    "adapters": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Framework adapters. Opt-in and never discovered from a target repository: a manifest sitting in a checkout must not be able to cause a program to run. Adapters contribute expectations about what an application should enforce; whether it does is established by the runtime checks.",
+      "properties": {
+        "sourceRoot": {
+          "type": "string",
+          "description": "The application source to inspect. Required when any adapter is configured."
+        },
+        "trust": {
+          "enum": [
+            "none",
+            "execute-target-code"
+          ],
+          "description": "Defaults to none. \"execute-target-code\" authorises adapters that run the inspected application's own code \u2014 asking Laravel to list its routes boots the framework and runs every service provider, and importing a NestJS module executes it. Adapters reporting framework-native extraction are refused unless this is set."
+        },
+        "use": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "path"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "description": "Must match the name the adapter reports, so a document cannot be attributed to an adapter that did not produce it."
+              },
+              "path": {
+                "type": "string",
+                "description": "The adapter executable, run directly with an explicit argument vector and never through a shell."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Extra arguments passed after --source-root."
+              },
+              "timeoutSeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 900
+              },
+              "passEnv": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                },
+                "description": "Environment variables to forward. The adapter's environment is otherwise built from nothing. This tool's own identity credentials can never be forwarded, whatever is named here."
+              }
+            }
+          }
+        }
+      }
+    },
     "discovery": {
       "type": "object",
       "additionalProperties": false,
