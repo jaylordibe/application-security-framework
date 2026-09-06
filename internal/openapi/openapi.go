@@ -3,7 +3,7 @@
 //
 // The specification is untrusted input. For one of the reference applications it
 // is fetched from the target itself, so a hostile document must not be able to
-// make Assay read local files or contact other hosts. Only local "#/" pointers
+// make AppSec Framework read local files or contact other hosts. Only local "#/" pointers
 // are resolved; every external $ref is refused and recorded as a coverage gap.
 //
 // The security-requirement semantics implemented here are the most load-bearing
@@ -114,7 +114,7 @@ type Fidelity struct {
 	Detail     string
 }
 
-// document is the subset of OpenAPI that Assay reads.
+// document is the subset of OpenAPI that AppSec Framework reads.
 type document struct {
 	OpenAPI string                    `json:"openapi"`
 	Swagger string                    `json:"swagger"`

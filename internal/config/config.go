@@ -1,4 +1,4 @@
-// Package config loads and validates assay.yaml.
+// Package config loads and validates appsec.yaml.
 //
 // Configuration is trusted in the sense that the operator wrote it, but it is
 // validated strictly anyway: a trusted author still makes mistakes, and a
@@ -33,9 +33,9 @@ const MaxConfigBytes = 1 << 20 // 1 MiB
 // It is required from day one. Adding a version field later, after strict
 // decoding has already rejected unknown fields, would make every existing
 // configuration invalid.
-const CurrentAPIVersion = "assay/v1alpha1"
+const CurrentAPIVersion = "appsec/v1alpha1"
 
-// Config is the parsed assay.yaml.
+// Config is the parsed appsec.yaml.
 type Config struct {
 	APIVersion  string      `yaml:"apiVersion"`
 	Target      Target      `yaml:"target"`
@@ -173,7 +173,7 @@ func Default() Config {
 			FailOnConfirmed: string(model.SeverityLow),
 			FailOnSuspected: string(model.SeverityHigh),
 		},
-		Output: Output{Dir: ".assay"},
+		Output: Output{Dir: ".appsec"},
 	}
 }
 

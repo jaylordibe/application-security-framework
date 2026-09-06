@@ -16,8 +16,8 @@ import (
 // 2.1.0 schema and uses the operation's URL as the artifact location, which the
 // specification permits. GitHub code scanning, however, expects a
 // repository-relative path, so it will ingest this file but will not link
-// results to source. Only source-derived findings can do that, and Assay has
-// none yet.
+// results to source. Only source-derived findings can do that, and AppSec
+// Framework has none yet.
 
 // sarifVersion is pinned. Emitting a different version silently would break
 // every consumer's parser.
@@ -184,7 +184,7 @@ func WriteSARIF(w io.Writer, doc Document) error {
 			Kind:    kind,
 			Message: sarifText{Text: f.Title + ". " + f.Actual},
 			PartialFingerprints: map[string]string{
-				"assayFindingId/v1": fingerprint(f.CheckID + "\x00" + f.OperationID),
+				"appsecFindingId/v1": fingerprint(f.CheckID + "\x00" + f.OperationID),
 			},
 			Locations: []sarifLocation{{
 				PhysicalLocation: sarifPhysicalLocation{
@@ -225,7 +225,7 @@ func WriteSARIF(w io.Writer, doc Document) error {
 		Version: sarifVersion,
 		Runs: []sarifRun{{
 			Tool: sarifTool{Driver: sarifDriver{
-				Name:           "assay",
+				Name:           "application-security-framework",
 				Version:        doc.Tool.Version,
 				InformationURI: "https://github.com/jaylordibe/application-security-framework",
 				Rules:          ruleList,
@@ -243,7 +243,7 @@ func WriteSARIF(w io.Writer, doc Document) error {
 			// Coverage has no home in SARIF's vocabulary, so it travels in
 			// properties rather than being dropped.
 			Properties: map[string]any{
-				"assaySchemaVersion":  doc.SchemaVersion,
+				"appsecSchemaVersion": doc.SchemaVersion,
 				"assurance":           doc.Assurance,
 				"classesNotAssessed":  doc.ClassesNotAssessed,
 				"coverage":            doc.Coverage,

@@ -42,9 +42,9 @@ func newScanCommand(stdout, stderr io.Writer) *cobra.Command {
 		Use:   "scan [target-url]",
 		Short: "Assess a target application",
 		Long: "Assess an application you own or are explicitly authorized to test.\n\n" +
-			"The target URL you supply is the authorization you are giving: Assay will\n" +
-			"contact that origin and nothing else unless you widen the scope in\n" +
-			"assay.yaml.",
+			"The target URL you supply is the authorization you are giving: AppSec\n" +
+			"Framework will contact that origin and nothing else unless you widen\n" +
+			"the scope in appsec.yaml.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := resolveConfig(configPath, args)
@@ -76,16 +76,16 @@ func newScanCommand(stdout, stderr io.Writer) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&configPath, "config", "c", "", "path to assay.yaml (default: ./assay.yaml if present)")
+	cmd.Flags().StringVarP(&configPath, "config", "c", "", "path to appsec.yaml (default: ./appsec.yaml if present)")
 	cmd.Flags().StringVar(&specFile, "spec", "", "path to an OpenAPI document on disk")
 	cmd.Flags().StringVar(&specURL, "spec-url", "", "URL of an OpenAPI document served by the target")
 	cmd.Flags().StringVar(&profile, "profile", "", "safety profile: discovery, verification, intrusive")
-	cmd.Flags().StringVarP(&outputDir, "output", "o", "", "run output directory (default: .assay)")
+	cmd.Flags().StringVarP(&outputDir, "output", "o", "", "run output directory (default: .appsec)")
 	cmd.Flags().BoolVar(&noProbe, "no-probe", false, "do not probe well-known specification paths")
 	return cmd
 }
 
-// resolveConfig loads assay.yaml if present, then applies the positional target.
+// resolveConfig loads appsec.yaml if present, then applies the positional target.
 //
 // The URL the operator typed is treated as the authorization they granted: the
 // target's own origin is always in scope, and loopback targets enable private
@@ -96,8 +96,8 @@ func resolveConfig(configPath string, args []string) (config.Config, error) {
 
 	path := configPath
 	if path == "" {
-		if _, err := os.Stat("assay.yaml"); err == nil {
-			path = "assay.yaml"
+		if _, err := os.Stat("appsec.yaml"); err == nil {
+			path = "appsec.yaml"
 		}
 	}
 	if path != "" {
@@ -113,8 +113,8 @@ func resolveConfig(configPath string, args []string) (config.Config, error) {
 	}
 	if cfg.Target.BaseURL == "" {
 		return config.Config{}, fail(ExitUsage,
-			"no target given.\n\n  Try:  assay scan http://localhost:3000\n"+
-				"  Or:   assay init    (to create an assay.yaml)")
+			"no target given.\n\n  Try:  appsec scan http://localhost:3000\n"+
+				"  Or:   appsec init    (to create an appsec.yaml)")
 	}
 	if !strings.Contains(cfg.Target.BaseURL, "://") {
 		cfg.Target.BaseURL = "http://" + cfg.Target.BaseURL
@@ -180,11 +180,11 @@ func runScan(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) e
 	defer client.Close()
 
 	if cfg.Scope.AllowPrivateAddresses {
-		fmt.Fprintf(stderr, "assay: scope: %s (private addresses permitted for this target)\n", cfg.Target.BaseURL)
+		fmt.Fprintf(stderr, "appsec: scope: %s (private addresses permitted for this target)\n", cfg.Target.BaseURL)
 	}
 	if !store.PermissionsEnforced() {
 		fmt.Fprintln(stderr,
-			"assay: warning: this platform does not enforce owner-only file permissions, "+
+			"appsec: warning: this platform does not enforce owner-only file permissions, "+
 				"so the run directory may be readable by other users")
 	}
 
@@ -305,24 +305,24 @@ func discover(ctx context.Context, cfg config.Config, client *httpx.Client, now 
 					"was assessed\n\n  %v\n\n"+
 					"  This is a refusal, not a clean result. Cloud metadata addresses are\n"+
 					"  always denied. To assess a different host, widen scope deliberately:\n"+
-					"    scope.include in assay.yaml", scopeRefusal)
+					"    scope.include in appsec.yaml", scopeRefusal)
 		}
 		if raw == nil && parseFailure != nil {
 			return engine.Surface{}, fmt.Errorf(
 				"a document was served at a well-known path but could not be parsed\n\n"+
 					"  %v\n\n"+
-					"  This is a parse failure, not an absence. Point Assay at a valid\n"+
+					"  This is a parse failure, not an absence. Point AppSec Framework at a valid\n"+
 					"  document:\n"+
-					"    assay scan <target> --spec ./openapi.json", parseFailure)
+					"    appsec scan <target> --spec ./openapi.json", parseFailure)
 		}
 		if raw == nil {
 			return engine.Surface{}, fmt.Errorf(
 				"no OpenAPI document found.\n\n" +
-					"  Assay derives what should be protected from the application's own\n" +
+					"  AppSec Framework derives what should be protected from the application's own\n" +
 					"  specification. Without one it has no oracle and would be guessing.\n\n" +
 					"  Point it at a document:\n" +
-					"    assay scan <target> --spec ./openapi.json\n" +
-					"    assay scan <target> --spec-url <target>/api/docs-json")
+					"    appsec scan <target> --spec ./openapi.json\n" +
+					"    appsec scan <target> --spec-url <target>/api/docs-json")
 		}
 	default:
 		return engine.Surface{}, fmt.Errorf("no specification configured and probing is disabled")

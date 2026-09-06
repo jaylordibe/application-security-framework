@@ -1,4 +1,4 @@
-// Package scope decides whether Assay is permitted to contact a given endpoint.
+// Package scope decides whether AppSec Framework is permitted to contact a given endpoint.
 //
 // Scope is an allowlist: nothing is reachable unless the configuration grants
 // it. There is no deny-list to bypass, because allowlists fail closed and
@@ -65,7 +65,7 @@ type Policy struct {
 // deniedPrefixes are never permitted, even when private addresses are allowed.
 //
 // Cloud instance metadata is the reason this list exists: no legitimate
-// assessment target is the metadata service, and reaching it turns Assay into
+// assessment target is the metadata service, and reaching it turns AppSec Framework into
 // an credential-exfiltration tool for whoever controls the target.
 var deniedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("169.254.169.254/32"), // AWS/Azure/GCP IMDS

@@ -1,10 +1,10 @@
-# Threat model: Assay itself
+# Threat model: AppSec Framework itself
 
 This is security software that will deliberately connect to hostile applications, execute
 third-party scanners, and store captured credentials and personal data. Its own attack
 surface must be treated as seriously as the targets it assesses.
 
-Scope: the `assay` CLI, its configuration, its adapters and engines, its evidence store
+Scope: the `appsec` CLI, its configuration, its adapters and engines, its evidence store
 and its reports.
 
 The status of each control is load-bearing, because claiming a control is implemented when
@@ -26,7 +26,7 @@ Nothing here is marked TESTED without a test that fails if the control is remove
 ```
         UNTRUSTED                          |  TRUSTED
 ------------------------------------------ | ---------------------------
- target HTTP responses, headers, bodies    |  assay.yaml (user-authored)
+ target HTTP responses, headers, bodies    |  appsec.yaml (user-authored)
  HTML, JavaScript, redirects               |  the operator's intent
  OpenAPI / GraphQL documents               |  the local filesystem we own
  target source repositories                |
@@ -139,8 +139,8 @@ processes. A target-controlled string reaching a shell would be catastrophic.
 **Controls**
 
 - **No shell, ever.** Process execution will use explicit argument vectors
-  (`exec.CommandContext` with `argv`), never a shell string. **DESIGNED** — Assay
-  currently executes no subprocesses at all, which is why this is not marked implemented.
+  (`exec.CommandContext` with `argv`), never a shell string. **DESIGNED** — AppSec
+  Framework currently executes no subprocesses at all, which is why this is not marked implemented.
 - YAML decoding is hardened against the non-shell execution paths: the decoder is never
   given `ReferenceFiles` or `ReferenceDirs`, which would let a configuration file pull
   anchor definitions from arbitrary filesystem paths, and input is size-capped because
@@ -160,7 +160,7 @@ Scanner output is parsed by us. A hostile target can influence it (a reflected p
 becomes a finding title). Output may be enormous, malformed, or contain terminal escape
 sequences that rewrite the operator's terminal.
 
-**Controls.** For the untrusted input that Assay *does* parse today — OpenAPI documents,
+**Controls.** For the untrusted input that AppSec Framework *does* parse today — OpenAPI documents,
 which for one reference application are fetched from the target itself:
 
 - **External `$ref` is refused outright**, not resolved. A hostile document containing
@@ -238,7 +238,7 @@ The most likely real-world harm from this tool is not a broken scan — it is a 
   (`store.TestRunDirectoryIsOwnerOnly`). On Windows `os.Chmod` only toggles a read-only
   attribute, so the CLI **warns** rather than implying a protection that does not exist.
 - Configuration is not persisted into the run directory, so operator credentials cannot
-  reach it. `.gitignore` excludes `.assay/`, and `meta.json` warns whoever finds the
+  reach it. `.gitignore` excludes `.appsec/`, and `meta.json` warns whoever finds the
   directory later. **TESTED** (`store.TestMetaIsWritten`).
 - Un-redacted capture is not available. If it is ever added it must be per-run, explicit,
   and loudly recorded in the report. **PLANNED**.
@@ -399,15 +399,15 @@ Stated plainly rather than left for a reader to discover.
   that no engine integration exists at all.
 - **`INDETERMINATE` outcomes are reported but not automatically re-tried.**
 - **No signing of release artefacts.** Required before any binary distribution.
-- **A WAF or intermediary in front of the target can produce false negatives.** Assay
-  fingerprints edge headers and annotates a denial with the possibility that an
+- **A WAF or intermediary in front of the target can produce false negatives.** AppSec
+  Framework fingerprints edge headers and annotates a denial with the possibility that an
   intermediary, not the application, refused the request — but it cannot yet prove which.
 - **The attack surface is specification-derived**, so an undocumented route is invisible.
   This is disclosed in every report rather than mitigated.
-- **Assay is fingerprintable, and therefore cloakable.** Its `User-Agent`, its
-  `__assay_cb` cache-buster and its `assay-nonexistent-*` baseline paths are all
-  identifiable, so a hostile target can serve a denial to Assay and real data to everyone
-  else. Being identifiable is deliberate — an assessment tool that disguises itself is
+- **AppSec Framework is fingerprintable, and therefore cloakable.** Its `User-Agent`, its
+  `__appsec_cb` cache-buster and its `appsec-nonexistent-*` baseline paths are all
+  identifiable, so a hostile target can serve a denial to the scanner and real data to
+  everyone else. Being identifiable is deliberate — an assessment tool that disguises itself is
   harder to authorize and harder to stop — so this is accepted rather than fixed by
   randomisation. It is a real limitation when assessing an application you do not fully
   control.

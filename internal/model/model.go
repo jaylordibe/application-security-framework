@@ -56,7 +56,7 @@ const (
 )
 
 // Source records where a single fact came from, so a report can explain why
-// Assay believes something.
+// AppSec Framework believes something.
 type Source struct {
 	Kind SourceKind
 	// Ref is a path or URL. It is redacted before it is stored.
@@ -251,7 +251,7 @@ func (o Operation) RequiredPathParams() []string {
 	return out
 }
 
-// Identity is an actor Assay may act as. Identities are never invented; they
+// Identity is an actor AppSec Framework may act as. Identities are never invented; they
 // come from configuration only.
 type Identity struct {
 	ID string

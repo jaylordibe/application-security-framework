@@ -1,4 +1,4 @@
-// Package httpx is the only way Assay reaches the network.
+// Package httpx is the only way AppSec Framework reaches the network.
 //
 // It enforces the scope policy at two independent points, because neither is
 // sufficient alone:
@@ -75,9 +75,9 @@ type Options struct {
 	MaxBodyBytes int64
 	// MaxResponseHeaderBytes bounds response headers.
 	MaxResponseHeaderBytes int64
-	// UserAgent identifies Assay. Being identifiable is deliberate: an
-	// assessment tool that disguises itself is harder to authorize and harder to
-	// stop.
+	// UserAgent identifies AppSec Framework. Being identifiable is deliberate:
+	// an assessment tool that disguises itself is harder to authorize and
+	// harder to stop.
 	UserAgent string
 	// Resolver and Dial default to the standard library when nil.
 	Resolver Resolver
@@ -111,7 +111,7 @@ const (
 	DefaultTimeout                = 20 * time.Second
 	DefaultMaxBodyBytes           = 1 << 20 // 1 MiB
 	DefaultMaxResponseHeaderBytes = 1 << 18 // 256 KiB
-	DefaultUserAgent              = "Assay (+https://github.com/jaylordibe/application-security-framework)"
+	DefaultUserAgent              = "AppSec-Framework (+https://github.com/jaylordibe/application-security-framework)"
 )
 
 // New builds a Client. It returns an error rather than falling back to an

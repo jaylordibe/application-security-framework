@@ -1,4 +1,4 @@
-// Package check contains Assay's native checks.
+// Package check contains AppSec Framework's native checks.
 //
 // A check turns an expectation into requests, classifies what came back, and
 // returns a result the engine records. Checks never write files, never decide
@@ -494,7 +494,7 @@ func baselineURL(op model.Operation, nonce string) string {
 	} else {
 		path = ""
 	}
-	return base + path + "/assay-nonexistent-" + nonce
+	return base + path + "/appsec-nonexistent-" + nonce
 }
 
 // cacheBust appends a unique query parameter so an intermediary cache cannot
@@ -508,7 +508,7 @@ func cacheBust(raw string) (string, error) {
 	if strings.Contains(raw, "?") {
 		sep = "&"
 	}
-	return raw + sep + "__assay_cb=" + nonce, nil
+	return raw + sep + "__appsec_cb=" + nonce, nil
 }
 
 // cacheFingerprint reports evidence that a response came from a cache.

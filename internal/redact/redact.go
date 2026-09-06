@@ -8,7 +8,7 @@
 // Redaction is a mitigation, not a guarantee. It uses a deny-list of header
 // names, operator-registered values, values learned at runtime, and a small set
 // of high-signal token patterns. It will not catch every bespoke secret format,
-// and Assay's documentation says so rather than implying safety.
+// and AppSec Framework's documentation says so rather than implying safety.
 package redact
 
 import (

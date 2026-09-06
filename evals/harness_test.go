@@ -1,4 +1,4 @@
-// Package evals is Assay's evaluation harness.
+// Package evals is the AppSec Framework evaluation harness.
 //
 // Evaluation is part of the product, not an afterthought. Every security-relevant
 // behaviour is paired: a KNOWN VULNERABLE fixture that must be detected, and a

@@ -27,7 +27,7 @@ func newDoctorCommand(stdout, stderr io.Writer) *cobra.Command {
 		Use:   "doctor",
 		Short: "Report what is available and what each missing piece would unlock",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintf(stdout, "assay %s (%s/%s, %s)\n\n", Version, runtime.GOOS, runtime.GOARCH, runtime.Version())
+			fmt.Fprintf(stdout, "appsec %s (%s/%s, %s)\n\n", Version, runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 			fmt.Fprintln(stdout, "Core")
 			fmt.Fprintf(stdout, "  %-22s %s\n", "specification ingest", "available (OpenAPI 3.x)")

@@ -30,13 +30,13 @@ func persistAndSummarize(res engine.Result, run *store.Run, pol config.Policy, s
 	// return the same code as one that ran cleanly.
 	if res.ExecutedCount() == 0 {
 		fmt.Fprintln(stderr,
-			"\nassay: no checks executed. This run establishes nothing about the target.\n"+
+			"\nappsec: no checks executed. This run establishes nothing about the target.\n"+
 				"       See the coverage ledger in the report for why each item did not run.")
 		return &exitError{code: ExitNothingExecuted}
 	}
 
 	if reasons := policyFailures(res, pol); len(reasons) > 0 {
-		fmt.Fprintln(stderr, "\nassay: policy threshold exceeded:")
+		fmt.Fprintln(stderr, "\nappsec: policy threshold exceeded:")
 		for _, r := range reasons {
 			fmt.Fprintf(stderr, "  - %s\n", r)
 		}

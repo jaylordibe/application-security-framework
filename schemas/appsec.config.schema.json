@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/jaylordibe/application-security-framework/schemas/assay.config.schema.json",
-  "title": "Assay configuration (assay.yaml)",
-  "description": "Configuration for the assay CLI. The Go parser is the runtime authority; this schema exists for editor completion and CI validation, and a conformance test asserts the two agree on a corpus of valid and invalid documents.",
+  "$id": "https://github.com/jaylordibe/application-security-framework/schemas/appsec.config.schema.json",
+  "title": "AppSec Framework configuration (appsec.yaml)",
+  "description": "Configuration for the appsec CLI. The Go parser is the runtime authority; this schema exists for editor completion and CI validation, and a conformance test asserts the two agree on a corpus of valid and invalid documents.",
   "type": "object",
   "required": [
     "target"
@@ -11,7 +11,7 @@
   "properties": {
     "apiVersion": {
       "type": "string",
-      "const": "assay/v1alpha1",
+      "const": "appsec/v1alpha1",
       "description": "Configuration contract version. Required from the first release so that adding it later cannot invalidate existing files."
     },
     "target": {
@@ -189,7 +189,7 @@
     "environment": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Stated deviations from production, recorded as facts. Assay does not compute a fidelity score.",
+      "description": "Stated deviations from production, recorded as facts. AppSec Framework does not compute a fidelity score.",
       "properties": {
         "name": {
           "type": "string"
@@ -205,7 +205,7 @@
     "policy": {
       "type": "object",
       "additionalProperties": false,
-      "description": "When a run fails the build. Severity thresholds; empty disables a rule. Suspected findings count by default, because Assay cannot reach 'confirmed' without credentials and gating only on confirmed findings would exit 0 on a real bypass.",
+      "description": "When a run fails the build. Severity thresholds; empty disables a rule. Suspected findings count by default, because AppSec Framework cannot reach 'confirmed' without credentials and gating only on confirmed findings would exit 0 on a real bypass.",
       "properties": {
         "failOnConfirmed": {
           "enum": [

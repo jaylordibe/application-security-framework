@@ -1,4 +1,4 @@
-// Command assay assesses an application you own or are explicitly authorized to
+// Command appsec assesses an application you own or are explicitly authorized to
 // test.
 package main
 

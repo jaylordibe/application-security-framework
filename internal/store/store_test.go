@@ -61,6 +61,11 @@ func TestMetaIsWritten(t *testing.T) {
 }
 
 // A target-controlled name must never become a path.
+//
+// The rooted cases are asserted on every platform, not only the one whose
+// filepath recognises them: "/absolute.json" is absolute on Unix and merely a
+// relative name to Windows' filepath, so a check that deferred to the host
+// would accept on Windows what it refuses here.
 func TestPathTraversalIsRefused(t *testing.T) {
 	r := newRun(t)
 	for _, name := range []string{
@@ -68,6 +73,10 @@ func TestPathTraversalIsRefused(t *testing.T) {
 		"../../escape.json",
 		"evidence/../../escape.json",
 		"/absolute.json",
+		`\absolute.json`,
+		`C:\escape.json`,
+		"C:escape.json",
+		"//server/share/escape.json",
 		"",
 		".",
 	} {

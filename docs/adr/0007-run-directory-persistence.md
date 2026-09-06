@@ -21,7 +21,7 @@ the output — and trivially content-addressable for evidence.
 
 ## Decision
 
-Phase 1 persists to a **run directory** of JSON under `.assay/runs/<run-id>/`, created
+Phase 1 persists to a **run directory** of JSON under `.appsec/runs/<run-id>/`, created
 `0700` with files `0600`, behind a `store` seam.
 
 SQLite is adopted when a real requirement appears — cross-run history, comparison

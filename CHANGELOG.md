@@ -11,7 +11,7 @@ consumer can detect a change rather than misparse.
 ### Added
 
 - Initial project foundation: research, threat model, architecture and ten ADRs.
-- `assay` CLI with `scan`, `init` and `doctor`, and a documented exit-code contract that
+- `appsec` CLI with `scan`, `init` and `doctor`, and a documented exit-code contract that
   distinguishes "ran cleanly" from "executed nothing".
 - Framework-neutral domain model (`internal/model`) carrying no wire-format tags.
 - Scope enforcement as an allowlist, checked on the URL before DNS is emitted and on every
@@ -34,6 +34,14 @@ consumer can detect a change rather than misparse.
 - Run store with atomic writes, `0700`/`0600` permissions, content-addressed evidence and
   path-traversal and symlink refusal.
 - Offline evaluation harness with paired known-vulnerable and known-secure fixtures.
+
+### Changed
+
+- Adopted the project's final identity: product **Application Security Framework**,
+  short name **AppSec Framework**, CLI `appsec`, configuration `appsec.yaml`, runtime
+  state `.appsec/`. This reverses the unreleased bootstrap name *Assay*; see
+  [ADR-0011](docs/adr/0011-product-identity-application-security-framework.md). Nothing
+  had been released under the former name, so no compatibility alias is provided.
 
 ### Security hardening found by adversarial review
 

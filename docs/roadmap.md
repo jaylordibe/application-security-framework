@@ -13,7 +13,7 @@ disappear.** A milestone that adds surface without removing a limitation is defe
 
 Delivered in this repository, with tests.
 
-Research and justification; threat model; architecture and ten ADRs; the domain model;
+Research and justification; threat model; architecture and eleven ADRs; the domain model;
 scope enforcement; the HTTP client; capture-time redaction; OpenAPI ingestion with oracle
 grading; outcome classification; one check with a verification ladder; the coverage
 ledger; JSON and SARIF reporting; the run store; the offline evaluation harness; CI.
@@ -31,7 +31,7 @@ no authenticated baseline to compare an anonymous response against.
 
 | Task | Acceptance criteria |
 |---|---|
-| Identity model and credential loading | Credentials come from environment variables or a secrets file, never from `assay.yaml` in plaintext. Registered with the redactor before first use. |
+| Identity model and credential loading | Credentials come from environment variables or a secrets file, never from `appsec.yaml` in plaintext. Registered with the redactor before first use. |
 | Bearer and API-key providers | A configured identity can issue an authenticated request; failure to authenticate is `blocked{authentication_failed}`, never a silent anonymous run. |
 | Authenticated control request in the check | A finding reaches `confirmed` only when the anonymous and authenticated responses are materially equivalent; otherwise it stays `suspected` and says why. |
 | Identity liveness canary | A known-authenticated operation is probed periodically. On credential expiry, every result since the last good canary is invalidated and marked blocked — otherwise a token expiring mid-run produces a sweep of false "denied" results that reads as a clean report. |
@@ -66,7 +66,7 @@ primitive is proven on two dissimilar applications.
 
 **Removes the limitation:** the oracle depends entirely on a specification, and a
 specification that marks everything protected (or nothing) carries no information — which
-Assay currently grades and reports, but cannot improve.
+AppSec Framework currently grades and reports, but cannot improve.
 
 | Task | Acceptance criteria |
 |---|---|

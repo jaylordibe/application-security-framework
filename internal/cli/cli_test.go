@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jaylordibe/application-security-framework/internal/store"
 )
 
 func run(t *testing.T, args ...string) (int, string, string) {
@@ -46,7 +48,7 @@ func TestScanWithNoTargetFailsWithUsage(t *testing.T) {
 	if code != ExitUsage {
 		t.Fatalf("exit = %d, want %d", code, ExitUsage)
 	}
-	if !strings.Contains(errOut, "assay scan http://localhost:3000") {
+	if !strings.Contains(errOut, "appsec scan http://localhost:3000") {
 		t.Errorf("error does not suggest the next command: %q", errOut)
 	}
 }
@@ -131,7 +133,7 @@ func TestScanProducesReportAndLedger(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	code, out, _ := run(t, "scan", srv.URL)
+	code, out, errOut := run(t, "scan", srv.URL)
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want %d", code, ExitOK)
 	}
@@ -141,7 +143,7 @@ func TestScanProducesReportAndLedger(t *testing.T) {
 		t.Errorf("summary omits the assurance statement: %q", out)
 	}
 
-	matches, err := filepath.Glob(filepath.Join(dir, ".assay", "runs", "*", "report.json"))
+	matches, err := filepath.Glob(filepath.Join(dir, ".appsec", "runs", "*", "report.json"))
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("report not written: %v %v", matches, err)
 	}
@@ -183,9 +185,17 @@ func TestScanProducesReportAndLedger(t *testing.T) {
 	if !sawRefs {
 		t.Error("no coverage row references stored evidence")
 	}
+	// Where the platform honours POSIX modes, the run directory must be
+	// owner-only. Where it does not — Windows, where os.Chmod only toggles a
+	// read-only attribute — the contract is instead that the CLI says so, so
+	// an operator is never left believing in a protection that is not there.
 	info, err := os.Stat(filepath.Dir(matches[0]))
-	if err == nil && info.Mode().Perm() != 0o700 {
-		t.Errorf("run directory mode = %o, want 700", info.Mode().Perm())
+	if store.PermissionsEnforced() {
+		if err == nil && info.Mode().Perm() != 0o700 {
+			t.Errorf("run directory mode = %o, want 700", info.Mode().Perm())
+		}
+	} else if !strings.Contains(errOut, "does not enforce owner-only file permissions") {
+		t.Errorf("no warning that file permissions are unenforced: %q", errOut)
 	}
 }
 
@@ -217,16 +227,18 @@ func TestInitWritesConfigAndRefusesOverwrite(t *testing.T) {
 	if code, _, _ := run(t, "init"); code != ExitOK {
 		t.Fatalf("init exit = %d", code)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "assay.yaml"))
+	data, err := os.ReadFile(filepath.Join(dir, "appsec.yaml"))
 	if err != nil {
-		t.Fatalf("assay.yaml not written: %v", err)
+		t.Fatalf("appsec.yaml not written: %v", err)
 	}
-	if !strings.Contains(string(data), "apiVersion: assay/v1alpha1") {
+	if !strings.Contains(string(data), "apiVersion: appsec/v1alpha1") {
 		t.Error("generated config has no apiVersion")
 	}
-	info, err := os.Stat(filepath.Join(dir, "assay.yaml"))
-	if err == nil && info.Mode().Perm() != 0o600 {
-		t.Errorf("assay.yaml mode = %o, want 600", info.Mode().Perm())
+	// Only assert the mode where the platform enforces one; see
+	// store.PermissionsEnforced.
+	info, err := os.Stat(filepath.Join(dir, "appsec.yaml"))
+	if store.PermissionsEnforced() && err == nil && info.Mode().Perm() != 0o600 {
+		t.Errorf("appsec.yaml mode = %o, want 600", info.Mode().Perm())
 	}
 
 	if code, _, _ := run(t, "init"); code != ExitUsage {

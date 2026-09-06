@@ -1,15 +1,17 @@
-Assay
-Copyright 2026 The Assay Authors
+Application Security Framework
+Copyright 2026 The Application Security Framework Authors
 
-This product includes software developed as part of the Assay project
-(https://github.com/jaylordibe/application-security-framework),
-licensed under the Apache License, Version 2.0.
+This product includes software developed as part of the Application Security
+Framework project
+(https://github.com/jaylordibe/application-security-framework), licensed under
+the Apache License, Version 2.0.
 
 TRADEMARKS AND AFFILIATION
 
-Assay is an independent open-source project. It is NOT affiliated with, endorsed
-by, or sponsored by any of the following, whose names may appear in this project's
-documentation and code solely to identify the software they refer to:
+Application Security Framework is an independent open-source project. It is NOT
+affiliated with, endorsed by, or sponsored by any of the following, whose names
+may appear in this project's documentation and code solely to identify the
+software they refer to:
 
   - OWASP Foundation, Inc. ("OWASP", "OWASP ZAP", "OWASP API Security Top 10")
   - Checkmarx Ltd. ("ZAP by Checkmarx")
@@ -37,12 +39,13 @@ This binary links the following, each under its own licence. Run
 
 NO BUNDLED SECURITY ENGINES
 
-Assay bundles no external security engine and downloads none at runtime. Where it
-can invoke ZAP, Nuclei, Semgrep, opengrep or Hadrian, those are separate programs
-that the operator installs, running as separate processes under their own licences.
+AppSec Framework bundles no external security engine and downloads none at
+runtime. Where it can invoke ZAP, Nuclei, Semgrep, opengrep or Hadrian, those are
+separate programs that the operator installs, running as separate processes under
+their own licences.
 
 Semgrep's registry rules are licensed under the Semgrep Rules License v1.0, which
 permits use only for the user's own internal business purposes and forbids
-distribution or provision as a service. Assay therefore never ships, vendors,
-bundles or auto-fetches Semgrep registry rules, and its documentation and defaults
-do not reference registry rule packs.
+distribution or provision as a service. AppSec Framework therefore never ships,
+vendors, bundles or auto-fetches Semgrep registry rules, and its documentation
+and defaults do not reference registry rule packs.

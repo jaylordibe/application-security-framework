@@ -1,4 +1,4 @@
-# Product thesis: why Assay should exist
+# Product thesis: why AppSec Framework should exist
 
 This document answers the eight questions the project was required to answer **before**
 any code was written. It is deliberately blunt. If the answers had not held up, the

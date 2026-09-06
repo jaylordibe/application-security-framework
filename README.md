@@ -1,45 +1,60 @@
-# Assay
+# Application Security Framework
 
 **Evidence-based application security assessment.**
 
-Assay derives what an application *says* should be protected from the application's
-own metadata, observes what it *actually* does, and reports the difference — together
-with an explicit account of everything it could not test.
+AppSec Framework derives what an application *says* should be protected from the
+application's own metadata, observes what it *actually* does, and reports the difference
+— together with an explicit account of everything it could not test.
 
-> **Assay does not prove that an application is secure.** A run with no findings means
-> only that the checks it executed, against the operations it could see, produced none.
+> **AppSec Framework does not prove that an application is secure.** A run with no
+> findings means only that the checks it executed, against the operations it could see,
+> produced none.
 > Every report states what was not tested and why. That is the point of the tool.
 
 **Status: early foundation (v0.x).** One check is implemented. Schemas may change before
-1.0. See [What Assay does not do yet](#what-assay-does-not-do-yet) before relying on it.
-Assay has not been evaluated for precision or recall against a corpus of real
-applications, so no detection-quality claim is made.
+1.0. See [What AppSec Framework does not do yet](#what-appsec-framework-does-not-do-yet)
+before relying on it. It has not been evaluated for precision or recall against a corpus
+of real applications, so no detection-quality claim is made.
+
+---
+
+## Naming
+
+| | |
+|---|---|
+| Product name | Application Security Framework |
+| Short name | AppSec Framework |
+| Repository | `application-security-framework` |
+| CLI executable | `appsec` |
+| Configuration file | `appsec.yaml` |
+| Runtime state directory | `.appsec/` |
+| Machine-readable tool id | `application-security-framework` |
 
 ---
 
 ## Why this exists
 
-Two real applications were studied while designing Assay. Both run OWASP ZAP in CI. Both
-scans pass. Both authenticate as a **single administrator** holding every permission, and
-both run with `-I` so the job can never fail. One has a rules file that is entirely
-comments.
+Two real applications were studied while designing this project. Both run OWASP ZAP in
+CI. Both scans pass. Both authenticate as a **single administrator** holding every
+permission, and both run with `-I` so the job can never fail. One has a rules file that is
+entirely comments.
 
 Neither scan can detect a broken ownership or tenant boundary — not because ZAP is
 deficient, but because a single-identity scan cannot express a cross-identity
 expectation. **Nothing in either report says so.** The pipeline looks green.
 
-Assay is built around the two things that make that possible:
+AppSec Framework is built around the two things that make that possible:
 
 1. **The oracle** — deciding whether a response is a vulnerability requires knowing what
-   *should* have happened. Assay derives that expectation from the application's own
-   artefacts, and grades how much the derivation can be trusted.
+   *should* have happened. AppSec Framework derives that expectation from the
+   application's own artefacts, and grades how much the derivation can be trusted.
 2. **The ledger** — every unit of intended work carries a disposition: executed, blocked
    with a machine-readable cause, or untested with a reason. Coverage accounting is
    [absent from every open-source tool we surveyed](docs/research/ecosystem.md).
 
-What Assay deliberately does **not** claim: novelty for multi-identity authorization
-testing. [`praetorian-inc/hadrian`](https://github.com/praetorian-inc/hadrian) ships that,
-in Go, under Apache-2.0. Our reasoning is in
+What AppSec Framework deliberately does **not** claim: novelty for multi-identity
+authorization testing. [`praetorian-inc/hadrian`](https://github.com/praetorian-inc/hadrian)
+ships that, in Go, under Apache-2.0. Our reasoning is in
 [ADR-0003](docs/adr/0003-differentiator-oracle-and-coverage.md).
 
 ---
@@ -47,7 +62,7 @@ in Go, under Apache-2.0. Our reasoning is in
 ## Install
 
 ```bash
-go install github.com/jaylordibe/application-security-framework/cmd/assay@latest
+go install github.com/jaylordibe/application-security-framework/cmd/appsec@latest
 ```
 
 Or build from source:
@@ -55,33 +70,34 @@ Or build from source:
 ```bash
 git clone https://github.com/jaylordibe/application-security-framework
 cd application-security-framework
-make build      # produces ./dist/assay
+make build      # produces ./dist/appsec
 ```
 
-Assay is a single static binary. No runtime, no database, no account, no cloud service.
+AppSec Framework is a single static binary. No runtime, no database, no account, no cloud
+service.
 
 ---
 
 ## Use
 
 ```bash
-assay scan http://localhost:3000
+appsec scan http://localhost:3000
 ```
 
-The URL you pass **is the authorization you are granting**: Assay contacts that origin and
-nothing else unless you widen the scope in `assay.yaml`.
+The URL you pass **is the authorization you are granting**: AppSec Framework contacts that
+origin and nothing else unless you widen the scope in `appsec.yaml`.
 
 ```bash
-assay init      # write a commented assay.yaml
-assay doctor    # what is installed, and what each missing piece would unlock
-assay scan http://localhost:3000 --spec ./openapi.json
-assay scan https://staging.example.com --spec-url https://staging.example.com/openapi.json
+appsec init      # write a commented appsec.yaml
+appsec doctor    # what is installed, and what each missing piece would unlock
+appsec scan http://localhost:3000 --spec ./openapi.json
+appsec scan https://staging.example.com --spec-url https://staging.example.com/openapi.json
 ```
 
 ### What a run looks like
 
 ```
-Assay assessment 20260905T154341Z-7a55b019
+AppSec Framework assessment 20260905T154341Z-7a55b019
   target:   http://127.0.0.1:8731
   profile:  verification
   surface:  6 operations from openapi-url
@@ -131,7 +147,8 @@ security design as a bug.
 **Status codes are not trusted alone.** One studied application returns `400` for
 authentication failure, `400` for validation failure, `400` for a missing record, and `200`
 for a record owned by a different user. If your application publishes a stable error code,
-point `outcome.errorCodePointer` at it and Assay will use it in preference to the status.
+point `outcome.errorCodePointer` at it and AppSec Framework will use it in preference to
+the status.
 
 ---
 
@@ -155,11 +172,11 @@ addresses are denied even when private addressing is enabled. See
 
 Secrets are redacted **at capture time**, so they never reach disk. Run directories are
 created `0700` with files `0600`. Redaction is a mitigation, not a guarantee — do not
-commit `.assay/`.
+commit `.appsec/`.
 
 ---
 
-## What Assay does not do yet
+## What AppSec Framework does not do yet
 
 Being specific about this is part of the product.
 
@@ -167,7 +184,7 @@ Being specific about this is part of the product.
   API findings. Next milestone; see [the roadmap](docs/roadmap.md).
 - **No engine integrations.** ZAP, Nuclei, Semgrep and Hadrian are designed as optional
   subprocesses ([ADR-0005](docs/adr/0005-external-engines-are-subprocesses.md)) but none is
-  implemented. `assay doctor` reports what is on your PATH.
+  implemented. `appsec doctor` reports what is on your PATH.
 - **No framework adapters.** The NestJS and Laravel probes are designed
   ([ADR-0002](docs/adr/0002-out-of-process-adapters.md)), not built.
 - **No undocumented-route discovery.** The attack surface comes from the specification, so
@@ -178,8 +195,8 @@ Being specific about this is part of the product.
 - **No measured precision or recall.** The evaluation harness proves the check
   distinguishes paired vulnerable and secure fixtures; it does not establish a
   false-positive rate on real applications.
-- **Assay is fingerprintable, so a hostile target can cloak.** Its user agent, cache
-  buster and baseline paths are identifiable by design, because a scanner that disguises
+- **AppSec Framework is fingerprintable, so a hostile target can cloak.** Its user agent,
+  cache buster and baseline paths are identifiable by design, because a scanner that disguises
   itself is harder to authorize and harder to stop. That is the right trade for assessing
   your own application, and a real limitation otherwise.
 
@@ -207,9 +224,9 @@ policy:
   failOnSuspected: high
 ```
 
-Suspected findings count deliberately. Assay cannot reach `confirmed` without configured
-credentials, so gating only on confirmed findings would exit `0` on a real authentication
-bypass — a silent pass is the worst possible default for a security gate.
+Suspected findings count deliberately. AppSec Framework cannot reach `confirmed` without
+configured credentials, so gating only on confirmed findings would exit `0` on a real
+authentication bypass — a silent pass is the worst possible default for a security gate.
 
 ---
 
@@ -221,7 +238,7 @@ bypass — a silent pass is the worst possible default for a security gate.
 | [Product thesis](docs/research/product-thesis.md) | why this exists, and what it refuses to build |
 | [Ecosystem research](docs/research/ecosystem.md) | ZAP, Nuclei, Semgrep, Playwright, Hadrian — licences and findings |
 | [Reference applications](docs/research/reference-applications.md) | the evidence behind the design |
-| [Threat model](docs/security/threat-model.md) | Assay's own attack surface |
+| [Threat model](docs/security/threat-model.md) | this framework's own attack surface |
 | [ADRs](docs/adr/) | consequential decisions and their alternatives |
 | [Roadmap](docs/roadmap.md) | what is next, and what is explicitly out |
 
@@ -230,12 +247,12 @@ bypass — a silent pass is the worst possible default for a security gate.
 ## Authorization
 
 Assess only applications you own or are **explicitly authorized in writing** to test.
-Running this against systems you do not control may be illegal. Assay is deliberately
-identifiable in its `User-Agent`; do not remove that.
+Running this against systems you do not control may be illegal. AppSec Framework is
+deliberately identifiable in its `User-Agent`; do not remove that.
 
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-Assay is not affiliated with OWASP, Checkmarx, ProjectDiscovery, Semgrep Inc. or
-Praetorian. Names are used only to identify those projects.
+Application Security Framework is not affiliated with OWASP, Checkmarx, ProjectDiscovery,
+Semgrep Inc. or Praetorian. Names are used only to identify those projects.

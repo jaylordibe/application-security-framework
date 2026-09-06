@@ -11,7 +11,7 @@ func parse(t *testing.T, yaml string) (Config, error) {
 }
 
 const minimal = `
-apiVersion: assay/v1alpha1
+apiVersion: appsec/v1alpha1
 target:
   baseURL: http://localhost:3000
 `
@@ -27,7 +27,7 @@ func TestMinimalConfigLoadsWithDefaults(t *testing.T) {
 	if !cfg.ShouldExcludeAuthEndpoints() {
 		t.Error("authentication endpoints must be excluded by default")
 	}
-	if cfg.Output.Dir != ".assay" {
+	if cfg.Output.Dir != ".appsec" {
 		t.Errorf("default output dir = %q", cfg.Output.Dir)
 	}
 }
@@ -72,10 +72,10 @@ func TestInvalidProfileIsRejected(t *testing.T) {
 
 func TestTargetValidation(t *testing.T) {
 	cases := map[string]string{
-		"missing":            "apiVersion: assay/v1alpha1\ntarget:\n  baseURL: \"\"\n",
-		"unsupported scheme": "apiVersion: assay/v1alpha1\ntarget:\n  baseURL: file:///etc/passwd\n",
-		"no host":            "apiVersion: assay/v1alpha1\ntarget:\n  baseURL: http://\n",
-		"embedded creds":     "apiVersion: assay/v1alpha1\ntarget:\n  baseURL: http://u:p@x.test\n",
+		"missing":            "apiVersion: appsec/v1alpha1\ntarget:\n  baseURL: \"\"\n",
+		"unsupported scheme": "apiVersion: appsec/v1alpha1\ntarget:\n  baseURL: file:///etc/passwd\n",
+		"no host":            "apiVersion: appsec/v1alpha1\ntarget:\n  baseURL: http://\n",
+		"embedded creds":     "apiVersion: appsec/v1alpha1\ntarget:\n  baseURL: http://u:p@x.test\n",
 	}
 	for name, doc := range cases {
 		if _, err := parse(t, doc); err == nil {
@@ -85,7 +85,7 @@ func TestTargetValidation(t *testing.T) {
 }
 
 func TestUnsupportedAPIVersionIsRejected(t *testing.T) {
-	_, err := parse(t, "apiVersion: assay/v99\ntarget:\n  baseURL: http://x.test\n")
+	_, err := parse(t, "apiVersion: appsec/v99\ntarget:\n  baseURL: http://x.test\n")
 	if err == nil || !strings.Contains(err.Error(), "apiVersion") {
 		t.Fatalf("error = %v, want an apiVersion rejection", err)
 	}
@@ -124,7 +124,7 @@ func TestErrorCodePointerMustBeAJSONPointer(t *testing.T) {
 
 // The target's own origin is always in scope; nothing else is.
 func TestScopePolicyAlwaysIncludesTheTarget(t *testing.T) {
-	cfg, err := parse(t, "apiVersion: assay/v1alpha1\ntarget:\n  baseURL: http://localhost:3000\n"+
+	cfg, err := parse(t, "apiVersion: appsec/v1alpha1\ntarget:\n  baseURL: http://localhost:3000\n"+
 		"scope:\n  allowPrivateAddresses: true\n")
 	if err != nil {
 		t.Fatalf("Parse: %v", err)

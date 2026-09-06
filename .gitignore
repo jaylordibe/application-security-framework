@@ -1,16 +1,16 @@
 # Build output.
-# Anchored with a leading slash: a bare "assay" would also match the cmd/assay
-# source directory and silently exclude the program's entrypoint.
+# Anchored with a leading slash: a bare "appsec" would also match the
+# cmd/appsec source directory and silently exclude the program's entrypoint.
 /dist/
 /bin/
-/assay
+/appsec
 
 # Assessment output (may contain evidence and redaction misses)
-.assay/
-*.assay-run/
+.appsec/
+*.appsec-run/
 
 # Local overrides
-assay.local.yaml
+appsec.local.yaml
 .env
 .env.*
 !.env.example

@@ -15,14 +15,15 @@ var Version = "0.0.0-dev"
 // Execute runs the CLI and returns a process exit code.
 func Execute(args []string, stdout, stderr io.Writer) int {
 	root := &cobra.Command{
-		Use:   "assay",
+		Use:   "appsec",
 		Short: "Evidence-based application security assessment",
-		Long: "Assay assesses an application you own or are explicitly authorized to test.\n\n" +
+		Long: "AppSec Framework assesses an application you own or are explicitly\n" +
+			"authorized to test.\n\n" +
 			"It derives what the application says should be protected, observes what it\n" +
 			"actually does, and reports the difference — together with an explicit account\n" +
 			"of everything it could not test.\n\n" +
-			"Assay does not prove the absence of vulnerabilities. A run with no findings\n" +
-			"means only that the checks it executed produced none.",
+			"AppSec Framework does not prove the absence of vulnerabilities. A run\n" +
+			"with no findings means only that the checks it executed produced none.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,
@@ -45,7 +46,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 			}
 			return coded.code
 		}
-		fmt.Fprintf(stderr, "assay: %v\n", err)
+		fmt.Fprintf(stderr, "appsec: %v\n", err)
 		return ExitUsage
 	}
 	return ExitOK
@@ -61,10 +62,10 @@ type exitError struct {
 func (e *exitError) Error() string { return e.message }
 
 func fail(code int, format string, args ...any) error {
-	return &exitError{code: code, message: fmt.Sprintf("assay: "+format, args...)}
+	return &exitError{code: code, message: fmt.Sprintf("appsec: "+format, args...)}
 }
 
-// Main is the entry point used by cmd/assay.
+// Main is the entry point used by cmd/appsec.
 func Main() {
 	os.Exit(Execute(os.Args[1:], os.Stdout, os.Stderr))
 }

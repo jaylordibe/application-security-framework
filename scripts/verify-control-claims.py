@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify that every test cited by the threat model actually exists.
 
-Assay's thesis is that security tools overstate what they verified. The threat
+AppSec Framework's thesis is that security tools overstate what they verified. The threat
 model marks controls TESTED and names the test that proves each one. If a cited
 test is renamed or deleted, that claim silently becomes false — which is exactly
 the failure this project exists to prevent, committed against ourselves.

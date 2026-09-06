@@ -1,10 +1,10 @@
-# Assay build and validation.
+# AppSec Framework build and validation.
 #
 # `make check` is what CI runs and what a contributor should run before opening a
 # pull request. It requires no network, no database and no external engine.
 
 GO      ?= go
-BINARY  := assay
+BINARY  := appsec
 DIST    := dist
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)
 LDFLAGS := -s -w -X github.com/jaylordibe/application-security-framework/internal/cli.Version=$(VERSION)
@@ -14,7 +14,7 @@ LDFLAGS := -s -w -X github.com/jaylordibe/application-security-framework/interna
 .PHONY: build
 build: ## Build the binary into ./dist
 	@mkdir -p $(DIST)
-	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY) ./cmd/assay
+	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY) ./cmd/appsec
 
 .PHONY: fmt
 fmt: ## Format all Go source

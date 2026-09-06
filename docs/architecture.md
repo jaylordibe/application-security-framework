@@ -3,13 +3,13 @@
 Status: the M0 foundation is implemented and tested; everything beyond it is design only.
 This document describes the intended shape of the system and marks clearly what exists
 today. See `docs/roadmap.md` for what is next and `README.md` for the honest list of what
-Assay cannot yet do.
+AppSec Framework cannot yet do.
 
 ---
 
 ## 1. The one-sentence version
 
-Assay derives an **expectation** of how an application should behave from the
+AppSec Framework derives an **expectation** of how an application should behave from the
 application's own metadata, observes how it **actually** behaves, and reports the
 difference — together with an honest account of everything it could not test.
 
@@ -70,9 +70,9 @@ implementation genuinely exists or is imminent.
 
 | Package | Owns | Status |
 |---|---|---|
-| `cmd/assay` | binary entrypoint | ✅ |
+| `cmd/appsec` | binary entrypoint | ✅ |
 | `internal/cli` | command surface, exit codes, human output | ✅ |
-| `internal/config` | `assay.yaml` loading, strict decode, semantic validation | ✅ |
+| `internal/config` | `appsec.yaml` loading, strict decode, semantic validation | ✅ |
 | `internal/model` | the normalized application-security model | ✅ |
 | `internal/scope` | the authorization boundary for every request | ✅ |
 | `internal/httpx` | the only way to reach the network | ✅ |

@@ -1,6 +1,6 @@
 # Dependencies
 
-Assay is a supply-chain target: a backdoored dependency here is an attack on everyone who
+AppSec Framework is a supply-chain target: a backdoored dependency here is an attack on everyone who
 runs it against their own infrastructure. The list is short deliberately, and **adding a
 direct dependency requires an ADR**.
 

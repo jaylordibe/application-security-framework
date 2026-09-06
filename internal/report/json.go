@@ -23,7 +23,7 @@ import (
 // Consumers must treat an unrecognised blocked cause, outcome or finding state
 // as blocked rather than as success. Within a major version, fields are added
 // but never removed or repurposed.
-const SchemaVersion = "assay.report/v1alpha1"
+const SchemaVersion = "appsec.report/v1alpha1"
 
 // Document is the JSON report.
 type Document struct {
@@ -168,7 +168,7 @@ type CoverageEntry struct {
 func Build(res engine.Result, version string) Document {
 	doc := Document{
 		SchemaVersion: SchemaVersion,
-		Tool:          Tool{Name: "assay", Version: version},
+		Tool:          Tool{Name: "application-security-framework", Version: version},
 		Run: Run{
 			ID:                     res.RunID,
 			Target:                 res.Target,
@@ -288,7 +288,7 @@ func buildAssurance(res engine.Result) Assurance {
 
 	if res.Surface.SpecDerived {
 		a.SurfaceCompleteness = "This ledger enumerates only the operations declared in the " +
-			"specification Assay was given. Routes that exist but are not documented were not " +
+			"specification AppSec Framework was given. Routes that exist but are not documented were not " +
 			"discovered, are not counted here, and were not tested. Coverage is therefore relative " +
 			"to the specification, not to the application."
 	} else {
@@ -330,7 +330,7 @@ func WriteJSON(w io.Writer, doc Document) error {
 // Summary renders a short human-readable result for a terminal.
 func Summary(doc Document) string {
 	var b strings.Builder
-	b.WriteString("Assay assessment " + doc.Run.ID + "\n")
+	b.WriteString("AppSec Framework assessment " + doc.Run.ID + "\n")
 	b.WriteString("  target:   " + doc.Run.Target + "\n")
 	b.WriteString("  profile:  " + doc.Run.Profile + "\n")
 	b.WriteString("  surface:  " + strconv.Itoa(doc.Surface.OperationCount) + " operations from " +

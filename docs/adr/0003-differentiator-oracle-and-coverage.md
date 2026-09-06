@@ -31,7 +31,7 @@ Verified gaps, however, are real and consistent across the entire landscape:
 
 ## Decision
 
-Reposition. Assay's differentiators are, in priority order:
+Reposition. AppSec Framework's differentiators are, in priority order:
 
 1. **Oracle derivation** — deriving machine-checkable authorization expectations from the
    application's own metadata, with provenance, instead of hand-written YAML.

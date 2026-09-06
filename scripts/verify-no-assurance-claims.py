@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Fail if user-facing text asserts that a target is secure.
 
-Assay must never claim an application is secure; it can only report what it
+AppSec Framework must never claim an application is secure; it can only report what it
 tested and what it did not. This guards against that claim creeping into the
 code or the README.
 
-Negated forms are allowed and in fact required — "Assay does not prove that an
-application is secure" is the message we want.
+Negated forms are allowed and in fact required — "AppSec Framework does not prove
+that an application is secure" is the message we want.
 """
 import re
 import subprocess
@@ -56,7 +56,8 @@ def main() -> int:
         for o in offenders:
             print(f"  {o}", file=sys.stderr)
         print(
-            "\nAssay reports what it tested and what it did not. It never concludes "
+            "\nAppSec Framework reports what it tested and what it did not. It never "
+            "concludes "
             "that an application is secure.",
             file=sys.stderr,
         )

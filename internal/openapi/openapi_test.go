@@ -114,7 +114,7 @@ func TestDiscriminatingDocumentIsUsable(t *testing.T) {
 	}
 }
 
-// A hostile document must not be able to make Assay read local files or contact
+// A hostile document must not be able to make AppSec Framework read local files or contact
 // other hosts.
 func TestExternalRefsAreRefusedAndRecorded(t *testing.T) {
 	res := parse(t, `{"openapi":"3.0.0","info":{"title":"t","version":"1"},

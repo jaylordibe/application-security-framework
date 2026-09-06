@@ -37,7 +37,7 @@ const (
 
 // FormatVersion identifies the on-disk layout. A newer major version is refused
 // rather than misread.
-const FormatVersion = "assay.run/v1alpha1"
+const FormatVersion = "appsec.run/v1alpha1"
 
 // Run is one assessment's directory.
 type Run struct {
@@ -166,7 +166,7 @@ func (r *Run) WriteFile(name string, data []byte) error {
 // idempotent, which makes concurrent stores of the same digest safe.
 func (r *Run) PutEvidence(ex model.Exchange) (string, error) {
 	payload, err := json.MarshalIndent(exchangeDoc{
-		SchemaVersion: "assay.evidence/v1alpha1",
+		SchemaVersion: "appsec.evidence/v1alpha1",
 		Request: requestDoc{
 			Method:        ex.Request.Method,
 			URL:           ex.Request.URL,
@@ -214,7 +214,7 @@ func (r *Run) lexicalResolve(name string) (string, error) {
 	if name == "" {
 		return "", errors.New("store: empty file name")
 	}
-	if filepath.IsAbs(name) {
+	if isRooted(name) {
 		return "", fmt.Errorf("store: %q must be relative to the run directory", name)
 	}
 	clean := filepath.Clean(name)
@@ -228,6 +228,29 @@ func (r *Run) lexicalResolve(name string) (string, error) {
 		return "", fmt.Errorf("store: %q escapes the run directory", name)
 	}
 	return dest, nil
+}
+
+// isRooted reports whether name is anchored to a filesystem root under either
+// POSIX or Windows rules: a leading separator, a drive-letter prefix, or a UNC
+// path.
+//
+// filepath.IsAbs alone is not enough, because it answers only for the host:
+// "/absolute.json" is absolute on Unix and merely a relative name on Windows.
+// A validator that guards target-influenced names must refuse the same input
+// everywhere, so that what is rejected does not depend on where the run happens.
+func isRooted(name string) bool {
+	if name == "" {
+		return false
+	}
+	if name[0] == '/' || name[0] == '\\' {
+		return true
+	}
+	// A Windows drive-relative or drive-absolute prefix, e.g. "C:" or "C:\".
+	if len(name) >= 2 && name[1] == ':' {
+		c := name[0] | 0x20
+		return c >= 'a' && c <= 'z'
+	}
+	return filepath.IsAbs(name)
 }
 
 // assertContained verifies that the destination's real parent is still inside

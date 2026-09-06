@@ -1,8 +1,8 @@
-# Contributing to Assay
+# Contributing to Application Security Framework
 
 Thank you for considering it. This document is short on ceremony and specific about the
-few rules that matter, because Assay is security software and some mistakes here are
-worse than a bug.
+few rules that matter, because AppSec Framework is security software and some mistakes
+here are worse than a bug.
 
 ## The one rule
 
