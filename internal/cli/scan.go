@@ -220,18 +220,31 @@ func runScan(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) e
 		}
 	}
 
+	// One signal set for every check, so an operator-supplied error-code oracle
+	// cannot apply to one classification and not another.
+	signals := outcome.Signals{
+		ErrorCodePointer: cfg.Outcome.ErrorCodePointer,
+		DeniedCodes:      cfg.Outcome.DeniedCodes,
+		NotFoundCodes:    cfg.Outcome.NotFoundCodes,
+	}
+
+	fixtures := cfg.ResourceFixtures()
+
 	checks := []engine.Check{
 		check.AuthRequired{
-			Client: client,
-			Signals: outcome.Signals{
-				ErrorCodePointer: cfg.Outcome.ErrorCodePointer,
-				DeniedCodes:      cfg.Outcome.DeniedCodes,
-				NotFoundCodes:    cfg.Outcome.NotFoundCodes,
-			},
+			Client:         client,
+			Signals:        signals,
 			BaselineProbes: 2,
+			Resources:      fixtures,
 			Control:        identities.Primary(),
 			Now:            now,
 		},
+	}
+
+	if len(fixtures) > 0 && identities.Len() < 2 {
+		fmt.Fprintln(stderr, "appsec: warning: resource fixtures are configured but fewer than two "+
+			"identities are; a cross-owner boundary needs an owner and a non-owner, so no "+
+			"cross-owner work can run")
 	}
 
 	res, err := engine.Run(ctx, engine.Options{
@@ -249,6 +262,8 @@ func runScan(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) e
 		Concurrency:          cfg.Assessment.Concurrency,
 		RequestsPerSecond:    cfg.Assessment.RequestsPerSecond,
 		Identities:           identities,
+		Resources:            fixtures,
+		ResourceCheck:        check.CrossOwner{Signals: signals, Now: now},
 		Now:                  now,
 		EvidenceSink:         run.PutEvidence,
 	})

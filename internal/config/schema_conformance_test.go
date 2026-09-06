@@ -58,6 +58,57 @@ func validateAgainstSchema(t *testing.T, schema *jsonschema.Schema, doc string) 
 
 // validDocuments must be accepted by both the parser and the schema.
 var validDocuments = map[string]string{
+	"resource fixture": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://localhost:3000
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    type: order
+    owner: user-a
+    crossOwnerAccess: denied
+    values:
+      orderId: "abc123"
+`,
+	"shared resource with mutation and narrowing": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://localhost:3000
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: allowed
+    values: {orderId: "abc123"}
+    operations: ["GET /api/orders/{orderId}"]
+    nonOwners: [user-b]
+    mutation:
+      values:
+        status: "appsec-marker"
+`,
+	"no resources": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://localhost:3000
+resources: []
+`,
 	"bearer identity": `
 apiVersion: appsec/v1alpha1
 target:
@@ -281,6 +332,139 @@ identities:
     liveness:
       path: api/me
 `,
+	"resource has no crossOwnerAccess": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: user-a
+    values: {orderId: "1"}
+`,
+	"resource expectation is not a known value": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: maybe
+    values: {orderId: "1"}
+`,
+	"resource value contains a path separator": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "../../admin"}
+`,
+	"resource value contains a query delimiter": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "a?b=1"}
+`,
+	"resource has no values": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {}
+`,
+	"resource id is not a slug": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: "Order A"
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "1"}
+`,
+	"mutation without values": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "1"}
+    mutation: {}
+`,
 	"canary method is unsafe": `
 apiVersion: appsec/v1alpha1
 target:
@@ -305,6 +489,112 @@ func TestSchemaAcceptsEverythingTheParserAccepts(t *testing.T) {
 			}
 			if err := validateAgainstSchema(t, schema, doc); err != nil {
 				t.Fatalf("schema rejected a document the parser accepts:\n%v", err)
+			}
+		})
+	}
+}
+
+// semanticallyInvalidDocuments are rejected by the parser but cannot be
+// rejected by the schema.
+//
+// JSON Schema validates one document against a fixed shape. It cannot express
+// "this owner must be one of the ids listed elsewhere in the same file", because
+// that is a cross-reference between two arrays whose contents are only known at
+// load time. The rule is real and is enforced; it simply has one enforcement
+// point rather than two, and pretending otherwise in the conformance table would
+// be the sort of overstatement this project exists to avoid.
+var semanticallyInvalidDocuments = map[string]string{
+	"resource owner is not a configured identity": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: ghost
+    crossOwnerAccess: denied
+    values: {orderId: "1"}
+`,
+	"non-owner is not a configured identity": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "1"}
+    nonOwners: [ghost]
+`,
+	"owner listed as its own non-owner": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "1"}
+    nonOwners: [user-a]
+`,
+	"duplicate resource ids": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: user-a
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: user-b
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "1"}
+  - id: order-a
+    owner: user-b
+    crossOwnerAccess: denied
+    values: {orderId: "2"}
+`,
+}
+
+// The parser must reject every cross-reference error, and must say which name
+// was wrong so the operator can fix it without guessing.
+func TestParserRejectsInvalidCrossReferences(t *testing.T) {
+	for name, doc := range semanticallyInvalidDocuments {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse(strings.NewReader(doc), name); err == nil {
+				t.Fatal("parser accepted a document with an invalid reference")
 			}
 		})
 	}

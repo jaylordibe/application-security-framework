@@ -23,6 +23,7 @@ import (
 
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
+	"github.com/jaylordibe/application-security-framework/internal/resource"
 	"github.com/jaylordibe/application-security-framework/internal/scope"
 )
 
@@ -43,6 +44,7 @@ type Config struct {
 	Scope       Scope       `yaml:"scope"`
 	Assessment  Assessment  `yaml:"assessment"`
 	Identities  []Identity  `yaml:"identities"`
+	Resources   []Resource  `yaml:"resources"`
 	Discovery   Discovery   `yaml:"discovery"`
 	Outcome     Outcome     `yaml:"outcome"`
 	Environment Environment `yaml:"environment"`
@@ -166,6 +168,43 @@ type LivenessProbe struct {
 	// ExpectStatus lists statuses meaning the identity is still good. Empty
 	// means any 2xx.
 	ExpectStatus []int `yaml:"expectStatus"`
+}
+
+// Resource is one concrete resource known to belong to an identity.
+//
+// A fixture is what makes a cross-owner test mean anything: without one, asking
+// for /api/orders/{orderId} means inventing an identifier and reading a 404 that
+// says nothing about authorization.
+type Resource struct {
+	// ID is a stable, short name used in the ledger and in reports.
+	ID string `yaml:"id"`
+	// Type is a logical label such as "order". Descriptive only.
+	Type string `yaml:"type"`
+	// Owner is the identity id that owns this resource.
+	Owner string `yaml:"owner"`
+	// CrossOwnerAccess is "denied" or "allowed". Required: whether non-owners
+	// may reach this resource is a statement about the application that AppSec
+	// Framework must not guess. Assuming every owned resource is private would
+	// report every deliberately shared record as a broken access control.
+	CrossOwnerAccess string `yaml:"crossOwnerAccess"`
+	// Values fill an operation's declared parameters, keyed by parameter name.
+	Values map[string]string `yaml:"values"`
+	// Operations optionally narrows which operation ids this fixture applies to.
+	Operations []string `yaml:"operations"`
+	// NonOwners optionally narrows which identities probe this fixture. Empty
+	// means every configured identity except the owner.
+	NonOwners []string `yaml:"nonOwners"`
+	// Mutation enables cross-owner write testing. Absent means read-only.
+	Mutation *ResourceMutation `yaml:"mutation"`
+}
+
+// ResourceMutation holds the explicit values a cross-owner write attempts.
+//
+// Deliberately not a payload language. A generic mutation DSL would need
+// templating, generators and coercion, all pointed at somebody's real data, for
+// no gain over naming the two fields you want to change.
+type ResourceMutation struct {
+	Values map[string]any `yaml:"values"`
 }
 
 // Discovery configures how the attack surface is learned.
@@ -362,6 +401,14 @@ func (c *Config) Validate() error {
 	// away from the code that resolves it.
 	problems = append(problems, identity.ValidateAll(c.IdentityModels())...)
 
+	known := map[string]bool{}
+	for _, i := range c.Identities {
+		if i.ID != "" {
+			known[i.ID] = true
+		}
+	}
+	problems = append(problems, resource.ValidateAll(c.ResourceFixtures(), known)...)
+
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "\n  - "))
 	}
@@ -399,6 +446,32 @@ func (c Config) IdentityModels() []identity.Identity {
 			}
 		}
 		out = append(out, id)
+	}
+	return out
+}
+
+// ResourceFixtures maps the configured resources onto the resource package's
+// types.
+func (c Config) ResourceFixtures() []resource.Fixture {
+	out := make([]resource.Fixture, 0, len(c.Resources))
+	for _, r := range c.Resources {
+		f := resource.Fixture{
+			ID:               r.ID,
+			Type:             r.Type,
+			Owner:            r.Owner,
+			CrossOwnerAccess: resource.Expectation(r.CrossOwnerAccess),
+			Values:           r.Values,
+			Operations:       r.Operations,
+			NonOwners:        r.NonOwners,
+			// Everything configurable is, by definition, configured. Resources
+			// created through the application's own API would carry
+			// ProvenanceAPICreated, and M2 does not create any.
+			Provenance: resource.ProvenanceConfigured,
+		}
+		if r.Mutation != nil {
+			f.Mutation = &resource.Mutation{Values: r.Mutation.Values}
+		}
+		out = append(out, f)
 	}
 	return out
 }

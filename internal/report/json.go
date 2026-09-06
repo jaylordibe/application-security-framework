@@ -41,9 +41,12 @@ type Document struct {
 	// Identities records what was known about each configured principal. It
 	// carries no credential, no credential length and no fingerprint: an
 	// identity's id is publishable, and its material never is.
-	Identities []Identity      `json:"identities"`
-	Findings   []Finding       `json:"findings"`
-	Coverage   []CoverageEntry `json:"coverage"`
+	Identities []Identity `json:"identities"`
+	// Ownership accounts for the cross-owner boundaries this run exercised and
+	// states plainly what they do not cover.
+	Ownership Ownership       `json:"ownership"`
+	Findings  []Finding       `json:"findings"`
+	Coverage  []CoverageEntry `json:"coverage"`
 
 	ToolFailures       []string `json:"toolFailures"`
 	OutOfScopeHosts    []string `json:"outOfScopeHosts"`
@@ -120,6 +123,26 @@ type Identity struct {
 	Warnings          []string `json:"warnings,omitempty"`
 }
 
+// Ownership is the cross-owner account.
+//
+// It carries no percentage. The number of ownership boundaries an application
+// has is unknown and unknowable from a specification, so a percentage would need
+// a denominator nobody has. What can be stated truthfully is which boundaries
+// were exercised.
+type Ownership struct {
+	// Statement says in words what the numbers do and do not mean.
+	Statement string `json:"statement"`
+	// BoundariesVerified counts cross-owner units that reached a conclusion.
+	BoundariesVerified int `json:"boundariesVerified"`
+	BoundariesBlocked  int `json:"boundariesBlocked"`
+	BoundariesUntested int `json:"boundariesUntested"`
+	// Findings counts cross-owner findings.
+	Findings int `json:"findings"`
+	// Tested lists each exercised tuple, so a reader can see the actual extent
+	// rather than inferring it from a count.
+	Tested []string `json:"tested"`
+}
+
 // Surface describes what was discovered and how much it can be trusted.
 type Surface struct {
 	SpecDerived    bool     `json:"specDerived"`
@@ -161,6 +184,8 @@ type Finding struct {
 	OWASP        []string     `json:"owasp,omitempty"`
 	OperationID  string       `json:"operationId,omitempty"`
 	IdentityID   string       `json:"identityId,omitempty"`
+	ResourceID   string       `json:"resourceId,omitempty"`
+	OwnerID      string       `json:"ownerIdentityId,omitempty"`
 	Expected     string       `json:"expected"`
 	Actual       string       `json:"actual"`
 	EvidenceRefs []string     `json:"evidenceRefs,omitempty"`
@@ -191,6 +216,8 @@ type CoverageEntry struct {
 	Subject      string   `json:"subject"`
 	CheckID      string   `json:"checkId,omitempty"`
 	IdentityID   string   `json:"identityId,omitempty"`
+	ResourceID   string   `json:"resourceId,omitempty"`
+	OwnerID      string   `json:"ownerIdentityId,omitempty"`
 	Disposition  string   `json:"disposition"`
 	Cause        string   `json:"cause,omitempty"`
 	Detail       string   `json:"detail,omitempty"`
@@ -274,6 +301,8 @@ func Build(res engine.Result, version string) Document {
 			OWASP:        f.OWASP,
 			OperationID:  f.OperationID,
 			IdentityID:   f.IdentityID,
+			ResourceID:   f.ResourceID,
+			OwnerID:      f.OwnerIdentityID,
 			Expected:     f.Expected,
 			Actual:       f.Actual,
 			EvidenceRefs: f.EvidenceRefs,
@@ -295,6 +324,8 @@ func Build(res engine.Result, version string) Document {
 			Subject:      e.Subject,
 			CheckID:      e.CheckID,
 			IdentityID:   e.IdentityID,
+			ResourceID:   e.ResourceID,
+			OwnerID:      e.OwnerIdentityID,
 			Disposition:  string(e.Disposition),
 			Cause:        string(e.Cause),
 			Detail:       e.Detail,
@@ -302,6 +333,14 @@ func Build(res engine.Result, version string) Document {
 		})
 	}
 
+	doc.Ownership = Ownership{
+		Statement:          res.Ownership.Statement,
+		BoundariesVerified: res.Ownership.Verified,
+		BoundariesBlocked:  res.Ownership.Blocked,
+		BoundariesUntested: res.Ownership.Untested,
+		Findings:           res.Ownership.Findings,
+		Tested:             nonNil(res.Ownership.Boundaries),
+	}
 	doc.Assurance = buildAssurance(res)
 	return doc
 }
@@ -333,7 +372,9 @@ func buildAssurance(res engine.Result) Assurance {
 		BlockedChecks:  res.BlockedCount(),
 	}
 	for _, e := range res.Coverage {
-		if e.Disposition == model.DispositionUntested {
+		// Count untested assessment work only, on the same rule as the executed
+		// and blocked counts: an identity row is a precondition, not surface.
+		if e.Disposition == model.DispositionUntested && engine.IsAssessmentWork(e.Dimension) {
 			a.UntestedSurface++
 		}
 	}
@@ -450,6 +491,30 @@ func Summary(doc Document) string {
 	b.WriteString("  untested: " + strconv.Itoa(doc.Assurance.UntestedSurface) + "\n")
 	b.WriteString("  findings: " + strconv.Itoa(doc.Assurance.ConfirmedFindings) + " confirmed, " +
 		strconv.Itoa(doc.Assurance.SuspectedFindings) + " suspected\n")
+
+	// Ownership is stated in the terminal, not only in the JSON.
+	//
+	// A cross-owner finding is the most quotable thing this tool produces, and
+	// the extent behind it is the least visible: one boundary, on one resource,
+	// between one pair of identities. An operator who sees "2 confirmed" and
+	// never sees how narrow the test was will generalise it, and the report will
+	// have let them.
+	if o := doc.Ownership; o.BoundariesVerified+o.BoundariesBlocked+o.BoundariesUntested > 0 {
+		b.WriteString("\n")
+		b.WriteString("  ownership boundaries checked: " + strconv.Itoa(o.BoundariesVerified))
+		if o.BoundariesBlocked > 0 {
+			b.WriteString(", blocked " + strconv.Itoa(o.BoundariesBlocked))
+		}
+		if o.BoundariesUntested > 0 {
+			b.WriteString(", untested " + strconv.Itoa(o.BoundariesUntested))
+		}
+		b.WriteString("\n")
+		for _, t := range o.Tested {
+			b.WriteString("    - " + t + "\n")
+		}
+		b.WriteString(wrap(o.Statement, 76, "  "))
+	}
+
 	b.WriteString("\n")
 	b.WriteString(wrap(doc.Assurance.Statement, 76, "  "))
 	return b.String()

@@ -476,6 +476,105 @@ hand over, often with real privilege.
   configured credential would be inherited by a third-party binary. This is already recorded
   as an M4 acceptance criterion and is restated here because M1 is what makes it dangerous.
 
+### T-17 Resource fixtures, cross-owner probing and mutation
+
+M2 introduced the first requests AppSec Framework builds from operator-supplied
+*data* rather than from a specification, and the first requests that deliberately
+change somebody's records. Both are new classes of harm.
+
+**A fixture value must not be able to change the shape of a URL.**
+
+- Values are refused at load if they contain a path separator, a backslash, a
+  query or fragment delimiter, an authority delimiter, a percent sign, a parent
+  directory reference or a control character. Refused rather than escaped: the
+  intent of `orderId: ../../admin` is unambiguous and encoding it silently would
+  hide a mistake worth surfacing. **TESTED**
+  (`resource.TestBindRefusesValuesThatCouldChangeTheURL`, 14 cases).
+- Binding works from the parsed parameter list, not by substituting into the path
+  text. Generic replacement would rewrite any braced text it found and give no way
+  to distinguish a filled operation from an unfilled one. An unfilled template
+  segment is an error, never a literal `{name}` on the wire. **TESTED**
+  (`resource.TestBindRefusesAnUnfilledTemplateSegment`).
+- Each value is percent-encoded exactly once and the finished URL is re-parsed and
+  checked: same scheme, same host, no userinfo, no query or fragment, and the base
+  path still a prefix. Encoding is the mechanism; the origin check is the control.
+  **TESTED** (`resource.TestBindAcceptsRealIdentifierShapes`,
+  `TestBindDoesNotDoubleEncode`, `evals.TestM2_FixtureValueCannotEscapeScope`,
+  which asserts the off-origin host received zero requests).
+- Double-encoding is a correctness control as well as a safety one: a
+  double-encoded identifier addresses a resource that does not exist, and the
+  resulting 404 would be read as a denial.
+
+**Cross-owner probing must not manufacture a result.**
+
+- The owner control, both identities' liveness, and the owner re-check are all
+  required before a denial is recorded as verified. Each closes a way for an
+  untested boundary to look enforced. **TESTED**
+  (`evals.TestM2_OwnerCannotReachFixtureIsBlocked`,
+  `TestM2_DeadAttackerIdentityIsBlockedNotEnforcement`,
+  `TestM2_DeadOwnerIdentityIsBlocked`,
+  `TestM2_ResourceDisappearingMidTestIsBlocked`).
+- **TOCTOU is handled by re-checking, not by locking.** Nothing here can stop a
+  resource changing on a live application; what it can do is notice. The window
+  between the owner control and the non-owner probe is bounded by doing them
+  back to back, and the re-check afterwards turns an undetected race into a
+  blocked row.
+- Units touching one fixture are serialised, so two of this tool's own units
+  cannot interleave their reads and writes and attribute each other's effects.
+  Different fixtures still run in parallel. **TESTED**
+  (`evals.TestM2_IdentitiesDoNotContaminateEachOther`, which asserts on the wire
+  that no request carried the wrong or a mixed credential, under `-race`).
+- Two identities in one run double the chance of credential contamination. Header
+  maps are rebuilt per request and never shared, which M1 established and M2
+  exercises far harder. **TESTED** (`identity.TestHeadersAreNotShared`,
+  `evals.TestM2_NeitherCredentialReachesDisk`).
+
+**Mutation must be consented to, verified, and reported honestly.**
+
+- A cross-owner write is state-changing, so `RequiredProfileForMethod` gates it to
+  the intrusive profile, which itself requires `authorizeIntrusive`. The fixture
+  must additionally carry a `mutation` block. Three separate acts of consent, none
+  implicit. **TESTED** (`evals.TestM2_MutationRequiresTheIntrusiveProfile`, which
+  asserts zero write requests were sent).
+- A write with no readable operation to observe it is refused rather than sent:
+  an unverifiable write is all risk and no evidence. **TESTED**
+  (`evals.TestM2_MutationWithoutAReadableOperationIsBlocked`, asserting zero
+  writes).
+- Confirmation requires the owner's own view to change, field by field, and only
+  for fields that did not already hold the written value. **TESTED**
+  (`check.TestMutationApplied`, `evals.TestM2_FakeSuccessMutation_IsNotConfirmed`).
+- Restoration is attempted as the owner and **verified by re-reading**. When it
+  fails the run records a tool failure naming the fixture, because a resource left
+  modified is somebody's data still being wrong. It is never silent. **TESTED**
+  (`evals.TestM2_VulnerableMutation_IsConfirmedByOwnerSideObservation`).
+
+**Resource values may themselves be sensitive.** A fixture value is an identifier
+the operator chose, and it travels in a URL, which is captured in evidence and
+rendered in reproduction steps. The existing URL redaction applies, but an
+identifier that is itself a secret — a share token, a signed link — is not
+recognised as one. Prefer fixtures whose identifiers are opaque row ids.
+
+**Residual risk, stated rather than mitigated.**
+
+- **Mutation is not transactional.** Restoration is best-effort by construction:
+  the application may reject the restoring write, may have recomputed dependent
+  fields, or may have fired side effects — an email, a webhook, an audit row —
+  that no restoration can undo. Cross-owner writes belong in a disposable
+  environment, and the intrusive profile exists to make that a decision rather
+  than an accident.
+- **A confirmed cross-owner read means the fixture's data reached another
+  identity during the assessment.** That is the finding, and it is also a real
+  disclosure to a real account. Use accounts created for testing.
+- **Ownership is asserted, not proven.** A configured fixture is trusted to be
+  owned by the identity that claims it. If the operator is wrong, the owner
+  control fails and the row blocks — but a fixture owned by *both* identities
+  would report a false positive, which is why `crossOwnerAccess: allowed` exists
+  and why the expectation is required.
+- **Identifier collision across identities.** If A and B each own a resource with
+  the same identifier under different scopes, a non-owner probe may address B's
+  own record. The resource-identity discriminator catches the common case by
+  comparing values at matching paths; it is not a proof against every scheme.
+
 ## 3. Residual risk accepted at this stage
 
 Stated plainly rather than left for a reader to discover.

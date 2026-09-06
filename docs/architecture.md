@@ -78,6 +78,7 @@ implementation genuinely exists or is imminent.
 | `internal/httpx` | the only way to reach the network | ✅ |
 | `internal/redact` | secret redaction at capture time (zero-dependency leaf) | ✅ |
 | `internal/identity` | principals, credential sources, authenticated controls, liveness | ✅ |
+| `internal/resource` | resource fixtures, ownership expectation, safe parameter binding | ✅ |
 | `internal/openapi` | specification ingestion → operations + declared expectations | ✅ |
 | `internal/outcome` | response → access outcome classification | ✅ |
 | `internal/check` | check implementations | ✅ |
@@ -271,7 +272,109 @@ project exists to prevent.
 
 ---
 
-## 9. Failure semantics
+## 9. Cross-owner testing (M2)
+
+### The primitive
+
+```
+identity A ──owns──▶ resource X
+     │                   ▲
+     │ owner control     │ owner re-check
+     ▼                   │
+   reachable ──▶ identity B probes X ──▶ still reachable?
+                          │
+                          ▼
+              denied / not_found  →  boundary verified
+              allowed             →  is it really X?
+```
+
+Three requests for a read, in that order, and all three matter. The owner control
+proves the fixture is real and reachable. The probe is the actual question. The
+re-check proves the resource did not vanish underneath the test — without it, a
+record deleted between the first two requests makes B's 404 read as an enforced
+boundary, which is an untested control reported as working.
+
+### The fixture
+
+A fixture is a resource the assessment knows exists, knows who owns, and knows how
+to address. It carries a stable id, a logical type, an owner identity, the values
+that fill an operation's declared parameters, its provenance, and — required — the
+expectation for non-owners.
+
+It deliberately has no notion of a primary key, a foreign key, a tenant column or
+an ORM relation. The two reference applications disagree about all of them: one
+expresses ownership as a membership row with no owner column anywhere, the other
+has no tenancy at all. Parameter values are the only thing every application has
+in common.
+
+**Ownership expectation is declared, never inferred.** `crossOwnerAccess` is
+`denied` or `allowed` with no default. Assuming that every owned resource is
+private would report every deliberately shared record as a broken access control.
+
+**Provenance is recorded.** M2 produces only `configured` fixtures. The
+`api-created` value exists in the model so the report schema does not have to
+change when provisioning is built, and nothing produces it yet. Ownership is never
+inferred from a value merely appearing in a response — a list endpoint returns
+other people's identifiers all day.
+
+### Parameter binding
+
+Binding works from the parsed parameter list, not by substituting into path text.
+Values are refused at load if they could change the URL's shape, encoded exactly
+once, and the finished URL is re-parsed and checked against the operation's own
+origin. See T-17.
+
+### Verification
+
+| | Confirmed only when |
+|---|---|
+| Read | the non-owner's outcome is `allowed`, its response is materially equivalent to the owner's (M1's comparison), **and** it can be tied to *that resource* — a fixture value at the same JSON path in both, or byte-identical bodies |
+| Write | the **owner's own view** changed, field by field, and only for fields that did not already hold the written value |
+
+Shape agreement alone is not resource identity: two orders have the same shape, so
+an application that quietly returns the caller's own record would match perfectly.
+An HTTP status is never evidence of a write. Both claims are backed by tests that
+fail when the corresponding discriminator is removed.
+[ADR-0013](adr/0013-cross-owner-verification-semantics.md) carries the reasoning.
+
+### Safety
+
+A cross-owner write needs three separate acts of consent: the intrusive profile,
+`authorizeIntrusive`, and a `mutation` block on the fixture. A write with no
+readable operation to observe it is refused rather than sent. Restoration is
+attempted as the owner and verified by re-reading; a failure becomes run-level
+tool state, never a buried detail.
+
+### Coverage
+
+A third ledger dimension, `ownership`, keyed by (operation, check, non-owner,
+resource, owner) so that two boundaries differing only in the resource cannot
+collapse into one row. The summary lists the tuples actually exercised and states
+that they imply nothing about any other resource, pair or operation. There is no
+percentage: the number of ownership boundaries an application has is unknowable
+from a specification, so a denominator would have to be invented.
+
+Identity rows remain preconditions and are not counted as executed work.
+Ownership rows are counted, because a probed boundary is assessment.
+
+### Bounded planning
+
+Fixtures multiply operations by identities. Planning is capped, and work beyond
+the cap becomes an untested row rather than a silent omission. With explicitly
+configured fixtures the product is small; the bound exists because the planner is
+where a future fixture source would make it large.
+
+### Not in M2
+
+No tenancy graph, no permission catalog, no role matrix, no privilege escalation,
+no BFLA, no workflow or state-machine testing, no framework adapters, no
+source-code or database ownership inference. Cross-owner `DELETE` is out of scope:
+it destroys the fixture and proves nothing a `PATCH` does not. API-created
+fixtures are deferred to environment provisioning.
+
+---
+
+## 10. Failure semantics
 
 - An engine crash is an engine crash. It becomes a blocked coverage entry and a recorded
   tool failure — never an absence of findings.
@@ -281,7 +384,7 @@ project exists to prevent.
 
 ---
 
-## 10. What is intentionally missing
+## 11. What is intentionally missing
 
 Discovery beyond specification ingestion; any external engine integration; identity and
 authentication providers; the adversarial authorization engine; tenancy; workflows;

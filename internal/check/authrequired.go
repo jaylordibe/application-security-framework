@@ -18,6 +18,7 @@ import (
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/outcome"
+	"github.com/jaylordibe/application-security-framework/internal/resource"
 )
 
 // AuthRequiredID identifies the declared-authentication check.
@@ -35,15 +36,31 @@ type Result struct {
 	// Exchanges are the evidence gathered, already redacted.
 	Exchanges []model.Exchange
 
-	// ControlIdentityID names the identity whose authenticated control request
-	// contributed to this result, and ControlAt is when that request completed.
+	// ToolFailure is set when the check left the target in a state it could not
+	// put back. It becomes run-level tool state rather than a detail string,
+	// because a failed cleanup means somebody's data is still wrong and that
+	// must not be discoverable only by reading a ledger row closely.
+	ToolFailure string
+
+	// ControlsUsed records every identity whose authenticated request
+	// contributed to this result, and when that request completed.
 	//
 	// The engine needs both to apply temporal validity: if a liveness canary
-	// later reports the identity invalid, every result whose control ran after
-	// the last confirmed-good canary must be re-scored conservatively. A result
-	// that used no control leaves these zero.
-	ControlIdentityID string
-	ControlAt         time.Time
+	// later reports an identity invalid, every result whose control ran after
+	// that identity's last confirmed-good canary must be re-scored
+	// conservatively. A result that used no control leaves this empty.
+	//
+	// It is a slice rather than a single identity because a cross-owner check
+	// depends on two: the owner establishing the baseline and the non-owner
+	// probing it. Either expiring invalidates the conclusion, so both have to be
+	// recorded.
+	ControlsUsed []ControlUse
+}
+
+// ControlUse records one identity's authenticated contribution to a result.
+type ControlUse struct {
+	IdentityID string
+	At         time.Time
 }
 
 // AuthRequired tests whether an operation whose own specification declares that
@@ -65,6 +82,12 @@ type AuthRequired struct {
 	// BaselineProbes is how many random paths are fetched to fingerprint the
 	// target's catch-all behaviour.
 	BaselineProbes int
+	// Resources are the configured resource fixtures. They make a parameterised
+	// operation testable: without a fixture, /api/orders/{orderId} can only be
+	// probed by inventing an identifier, and the resulting 404 says nothing
+	// about whether authentication is enforced. With one, the operation is
+	// addressed concretely and the check means what it says.
+	Resources []resource.Fixture
 	// Control issues the authenticated control request. Nil means no identity
 	// is configured, in which case the check behaves exactly as it did before
 	// identities existed: it reports a suspected finding and names the missing
@@ -114,7 +137,7 @@ func (AuthRequired) RequiredProfile(op model.Operation) model.Profile {
 // Applicable reports whether the check has an oracle for this operation, and why
 // not when it does not. A "no" here becomes an untested ledger row with a
 // reason, never a silent skip.
-func (AuthRequired) Applicable(op model.Operation) (bool, model.BlockedCause, string) {
+func (c AuthRequired) Applicable(op model.Operation) (bool, model.BlockedCause, string) {
 	if op.Security == nil {
 		return false, model.CauseNoOracle,
 			"the specification states no security requirement for this operation, so there is " +
@@ -130,20 +153,58 @@ func (AuthRequired) Applicable(op model.Operation) (bool, model.BlockedCause, st
 				"unauthenticated success is correct behaviour"
 	}
 	if params := op.RequiredPathParams(); len(params) > 0 {
-		return false, model.CauseMissingResource, fmt.Sprintf(
-			"this operation requires path parameter(s) %s and no resource was supplied; probing "+
-				"it with an invented identifier would exercise a resource that does not exist, and "+
-				"the resulting response would say nothing about access control",
-			strings.Join(params, ", "))
+		if _, ok := c.boundURL(op); !ok {
+			return false, model.CauseMissingResource, fmt.Sprintf(
+				"this operation requires path parameter(s) %s and no resource fixture supplies "+
+					"them; probing it with an invented identifier would exercise a resource that "+
+					"does not exist, and the resulting response would say nothing about access "+
+					"control. Declare the resource under resources[] to make it testable",
+				strings.Join(params, ", "))
+		}
 	}
 	return true, model.CauseNone, ""
+}
+
+// boundURL returns the concrete address of an operation, using a resource
+// fixture when one can fill its parameters.
+//
+// Fixtures are considered in sorted order and the first that binds wins, so two
+// runs against the same configuration address the same resource. A non-
+// deterministic choice here would make findings appear and disappear between
+// otherwise identical runs.
+func (c AuthRequired) boundURL(op model.Operation) (string, bool) {
+	if len(op.RequiredPathParams()) == 0 {
+		return operationURL(op), true
+	}
+	fixtures := make([]resource.Fixture, len(c.Resources))
+	copy(fixtures, c.Resources)
+	resource.SortFixtures(fixtures)
+	for _, f := range fixtures {
+		if !f.AppliesTo(op) {
+			continue
+		}
+		if b, err := resource.Bind(op, f.Values); err == nil {
+			return b.URL, true
+		}
+	}
+	return "", false
+}
+
+// requestURL returns the address to probe, falling back to the template so that
+// a caller which somehow reaches Run without a binding still sends something
+// addressable rather than a URL containing literal braces.
+func (c AuthRequired) requestURL(op model.Operation) string {
+	if u, ok := c.boundURL(op); ok {
+		return u
+	}
+	return operationURL(op)
 }
 
 // Run executes the check against one operation.
 func (c AuthRequired) Run(ctx context.Context, op model.Operation) Result {
 	var exchanges []model.Exchange
 
-	target := operationURL(op)
+	target := c.requestURL(op)
 
 	// Step 1: fingerprint the target's behaviour for paths that do not exist, so
 	// a catch-all route cannot be mistaken for an exposed endpoint.
@@ -416,14 +477,16 @@ func (c AuthRequired) Run(ctx context.Context, op model.Operation) Result {
 		detail += ", and an authenticated control request confirmed it received the protected resource"
 	}
 
-	return Result{
-		Disposition:       model.DispositionExecuted,
-		Detail:            detail,
-		Finding:           finding,
-		Exchanges:         exchanges,
-		ControlIdentityID: ctrl.identityID,
-		ControlAt:         ctrl.at,
+	res := Result{
+		Disposition: model.DispositionExecuted,
+		Detail:      detail,
+		Finding:     finding,
+		Exchanges:   exchanges,
 	}
+	if ctrl.identityID != "" {
+		res.ControlsUsed = []ControlUse{{IdentityID: ctrl.identityID, At: ctrl.at}}
+	}
+	return res
 }
 
 // unavailable names the corroboration this run could not obtain. Naming a gap
@@ -454,7 +517,7 @@ func (c AuthRequired) probe(ctx context.Context, op model.Operation, extra map[s
 	for k, v := range extra {
 		header[k] = v
 	}
-	url, err := cacheBust(operationURL(op))
+	url, err := cacheBust(c.requestURL(op))
 	if err != nil {
 		return model.Exchange{}, err
 	}
@@ -512,7 +575,7 @@ func (c AuthRequired) baselineFingerprint(ctx context.Context, op model.Operatio
 		if nerr != nil {
 			return fingerprint{}, exchanges, nerr
 		}
-		u := baselineURL(op, nonce)
+		u := baselineURL(c.requestURL(op), nonce)
 		ex, err := c.Client.Do(ctx, httpx.Request{
 			Method: http.MethodGet,
 			URL:    u,
@@ -551,15 +614,11 @@ func operationURL(op model.Operation) string {
 
 // baselineURL builds a sibling path that cannot exist, preserving the prefix so
 // that routing behaves as it would for the real operation.
-func baselineURL(op model.Operation, nonce string) string {
-	base := strings.TrimRight(op.BaseURL, "/")
-	path := "/" + strings.TrimLeft(op.PathTemplate, "/")
-	if i := strings.LastIndexByte(path, '/'); i > 0 {
-		path = path[:i]
-	} else {
-		path = ""
+func baselineURL(target, nonce string) string {
+	if i := strings.LastIndexByte(target, '/'); i > 0 {
+		target = target[:i]
 	}
-	return base + path + "/appsec-nonexistent-" + nonce
+	return target + "/appsec-nonexistent-" + nonce
 }
 
 // cacheBust appends a unique query parameter so an intermediary cache cannot
@@ -719,7 +778,7 @@ func (c AuthRequired) authenticatedControl(
 			"legitimate caller receives")
 	}
 
-	url, err := cacheBust(operationURL(op))
+	url, err := cacheBust(c.requestURL(op))
 	if err != nil {
 		return unusable("the authenticated control request could not be constructed: " + summarize(err))
 	}

@@ -75,6 +75,45 @@ identities:
   #     credential:
   #       env: APPSEC_SERVICE_KEY
 
+resources:
+  # Concrete resources known to belong to an identity, used to test whether a
+  # non-owner can reach or change them. Without a fixture, addressing
+  # /api/orders/{orderId} means inventing an identifier and reading a 404 that
+  # says nothing about authorization.
+  #
+  # A cross-owner test needs two identities: the owner and somebody who is not.
+  []
+  # - id: order-alice
+  #   type: order
+  #   owner: alice                 # must be an identities[].id
+  #
+  #   # Required. "denied" means non-owners must not reach it, which is the
+  #   # boundary to test. "allowed" means it is legitimately shared, so a
+  #   # non-owner reaching it is expected and is never reported.
+  #   #
+  #   # There is no default: whether a resource is private is a statement about
+  #   # your application, and assuming it would report every deliberately
+  #   # shared record as a broken access control.
+  #   crossOwnerAccess: denied
+  #
+  #   # Values that fill the operation's declared path parameters. Each fills
+  #   # one path segment; separators and URL delimiters are refused.
+  #   values:
+  #     orderId: "abc123"
+  #
+  #   # Optional. Narrow which operations and which non-owners are used.
+  #   # operations: ["GET /api/orders/{orderId}"]
+  #   # nonOwners: [bob]
+  #
+  #   # Optional. Enables cross-owner write testing, which requires the
+  #   # intrusive profile and authorizeIntrusive. A write is confirmed only by
+  #   # re-reading as the owner: an HTTP success never confirms one. The changed
+  #   # fields are restored afterwards on a best-effort basis, and the report
+  #   # says whether that worked.
+  #   # mutation:
+  #   #   values:
+  #   #     status: "appsec-marker"
+
 discovery:
   # AppSec Framework derives expectations from the application's own
   # specification. Give it one, or let it probe the usual locations on the

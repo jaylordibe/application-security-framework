@@ -13,7 +13,7 @@ disappear.** A milestone that adds surface without removing a limitation is defe
 
 Delivered in this repository, with tests.
 
-Research and justification; threat model; architecture and twelve ADRs; the domain model;
+Research and justification; threat model; architecture and thirteen ADRs; the domain model;
 scope enforcement; the HTTP client; capture-time redaction; OpenAPI ingestion with oracle
 grading; outcome classification; one check with a verification ladder; the coverage
 ledger; JSON and SARIF reporting; the run store; the offline evaluation harness; CI.
@@ -65,27 +65,63 @@ establishment, refresh rotation, custom multi-step authentication.
 
 ---
 
-## Next — M2: Two identities and one owned resource: BOLA
+## Done — M2: Two identities and one owned resource: BOLA
 
-**Removes the limitation:** the largest class of real API findings is invisible today.
+**Removed the limitation:** the largest class of real API findings was invisible.
 
-The evidence says this needs no tenancy graph and no permission catalog. It needs
-`identityA`, `identityB`, and a resource owned by A. That primitive covers OWASP API1.
+| Task | Acceptance criteria | Delivered |
+|---|---|---|
+| Resource fixtures | Resources are declared in configuration or created through the application's own API. A missing fixture is `blocked{missing_resource}`, never a pass. | ⚠️ **Partial.** Configured fixtures are implemented, validated and framework-neutral (`internal/resource`). A missing or unreachable fixture blocks. **API-created fixtures are deferred** — see below. |
+| Owner-side control request | A cross-owner probe is only meaningful if the owner can fetch the resource. Owner `200` + other `404` is a **proven** denial; owner `404` means the fixture is wrong, which is blocked, not clean. | ✅ with a correction to the criterion, below. |
+| Cross-owner read check | Paired fixtures: a repository with an ownership predicate and one without. | ✅ Paired vulnerable/secure applications differing only in whether the read is scoped by caller, plus 403, application-error-code, shared-resource and four misleading-200 variants. |
+| Mutation verification | A write is confirmed only by re-fetching as the owner and diffing. A `200` never confirms a mutation. | ✅ Read-write-read as the owner, field-level attribution, best-effort verified restoration. Cross-owner `DELETE` is deliberately out of scope ([ADR-0013](adr/0013-cross-owner-verification-semantics.md)). |
+| Path-parameter filling | Operations currently blocked as `missing_resource` become testable. | ✅ Both for cross-owner work and for the M1 declared-auth check, which previously reported every parameterised operation as untestable. |
 
-| Task | Acceptance criteria |
-|---|---|
-| Resource fixtures | Resources are declared in configuration or created through the application's own API. A missing fixture is `blocked{missing_resource}`, never a pass. |
-| Owner-side control request | A cross-owner probe is only meaningful if the owner can fetch the resource. Owner `200` + other `404` is a **proven** denial; owner `404` means the fixture is wrong, which is blocked, not clean. |
-| Cross-owner read check | Paired fixtures: a repository with an ownership predicate and one without. |
-| Mutation verification | A write is confirmed only by re-fetching as the owner and diffing. A `200` never confirms a mutation. |
-| Path-parameter filling | Operations currently blocked as `missing_resource` become testable. |
+### The owner-control criterion was not sufficient, and has been corrected
 
-**Non-goals:** tenancy, workflow state, privilege escalation. Those follow only once this
-primitive is proven on two dissimilar applications.
+The criterion above said owner `200` + other `404` is a **proven** denial. It is
+not, on its own. Three things produce that pair with no access control involved:
+the non-owner's credential is dead and returns 404 to everything; the resource
+stopped existing between the two requests; or the URL addresses nothing at all.
+
+So a denial is recorded as verified only when the owner control succeeded, **both**
+identities are live under M1's rules, and an **owner re-check after the probe**
+shows the resource is still there. The re-check is not defensive padding: removing
+it makes a fixture that disappears mid-test report as a verified denial, and the
+test asserting that is in the suite. Full reasoning in
+[ADR-0013](adr/0013-cross-owner-verification-semantics.md).
+
+Two further corrections in the same record: a read is confirmed only when the
+non-owner's response can be tied to *that resource* and not merely to a document
+of the same shape, and ownership expectation is declared per fixture rather than
+assumed, so a deliberately shared record is never reported.
+
+### API-created fixtures are deferred, and M2 is partial because of it
+
+The criterion allows resources to be "created through the application's own API".
+That is not implemented, and the milestone is marked partial rather than complete
+because of it.
+
+Creating a resource needs a configured creation operation, a request body, an
+extraction rule for the identifier the response returns, ordering guarantees
+against the checks that consume it, and a lifecycle that deletes it afterwards or
+explains why it could not. That is setup orchestration — the "environment
+provisioning" listed under **Later** — and building a narrow version of it inside
+M2 would produce exactly the premature architecture this project's ADRs exist to
+prevent.
+
+What this costs: an operator must know one resource identifier belonging to one
+identity. On both reference applications that means logging in and reading one
+list endpoint; the procedure is written down in
+[docs/evaluation/cross-owner-integration.md](evaluation/cross-owner-integration.md). What it buys: no half-built provisioning layer to unpick when
+environment provisioning is designed properly.
+
+**Non-goals held:** no tenancy, no workflow state, no privilege escalation, no
+permission or role matrices, no framework adapters.
 
 ---
 
-## M3 — Framework adapters
+## Next — M3: Framework adapters
 
 **Removes the limitation:** the oracle depends entirely on a specification, and a
 specification that marks everything protected (or nothing) carries no information — which

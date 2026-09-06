@@ -201,3 +201,157 @@ func quoteOrNone(s string) string {
 	}
 	return s
 }
+
+// Material equivalence answers "did these two callers receive the same kind of
+// document". For a cross-owner test that is necessary and not sufficient.
+//
+// Two different orders have the same shape. If identity B asks for A's order and
+// the application quietly returns B's own order instead — a real and common bug
+// — the shapes match perfectly, and shape alone would confirm a BOLA that does
+// not exist. What has to be shown is that B received *this* resource, so the
+// comparison needs an anchor in the resource's own identifying values.
+
+// resourceEvidence is the outcome of looking for proof that two responses
+// describe the same resource.
+type resourceEvidence struct {
+	// Proven is true when the non-owner's response demonstrably describes the
+	// owner's resource rather than merely a document of the same shape.
+	Proven bool
+	// Reason explains the decision either way.
+	Reason string
+}
+
+// sameResource looks for proof that attacker and owner received the same
+// resource, anchored on the fixture's own parameter values.
+//
+// Two independent proofs are accepted, because applications differ in whether
+// they echo an identifier back:
+//
+//  1. A fixture value appears at the same JSON path in both bodies. The value
+//     addressed the resource, so finding it in the same field of both responses
+//     ties them to the same record.
+//  2. The two bodies are byte-identical and non-empty. Different records
+//     essentially never serialise identically, so this covers APIs that do not
+//     echo their identifiers.
+//
+// Neither being available is not a failure of the application; it is a limit of
+// what this evidence can show, and it caps the finding at suspected.
+func sameResource(owner, attacker *model.CapturedResponse, values map[string]string) resourceEvidence {
+	if owner == nil || attacker == nil {
+		return resourceEvidence{Reason: "one of the two responses is missing"}
+	}
+	if owner.BodyTruncated || attacker.BodyTruncated {
+		// A truncated body has an unknown remainder. Two documents whose
+		// captured prefixes agree may diverge in the part that was cut, so a
+		// prefix match is not evidence that they describe the same resource.
+		return resourceEvidence{Reason: "a response exceeded the capture limit, so the part that " +
+			"would identify the resource may not have been captured"}
+	}
+
+	ownerBody := bytes.TrimSpace(owner.Body)
+	attackerBody := bytes.TrimSpace(attacker.Body)
+	if len(ownerBody) > 0 && bytes.Equal(ownerBody, attackerBody) {
+		return resourceEvidence{
+			Proven: true,
+			Reason: "the non-owner received a byte-identical document to the owner's",
+		}
+	}
+
+	ownerPaths, ok := valuePaths(owner)
+	if !ok {
+		return resourceEvidence{Reason: "the owner's response could not be modelled as JSON, so the " +
+			"resource's identifying values could not be located in it"}
+	}
+	attackerPaths, ok := valuePaths(attacker)
+	if !ok {
+		return resourceEvidence{Reason: "the non-owner's response could not be modelled as JSON, so it " +
+			"could not be tied to the owner's resource"}
+	}
+
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		v := values[name]
+		if v == "" {
+			continue
+		}
+		for _, path := range ownerPaths[v] {
+			for _, other := range attackerPaths[v] {
+				if path == other {
+					return resourceEvidence{
+						Proven: true,
+						Reason: fmt.Sprintf("the fixture's %s value appears at %s in both the owner's "+
+							"response and the non-owner's, so the non-owner received this resource "+
+							"and not merely a document of the same shape", name, path),
+					}
+				}
+			}
+		}
+	}
+
+	return resourceEvidence{Reason: "no identifying value from the fixture appears at the same field " +
+		"in both responses, and the two documents are not identical, so the non-owner's response " +
+		"could not be tied to the owner's resource"}
+}
+
+// valuePaths indexes a JSON body by scalar value, mapping each value to the
+// sorted paths at which it appears.
+func valuePaths(resp *model.CapturedResponse) (map[string][]string, bool) {
+	if resp == nil || resp.BodyTruncated {
+		return nil, false
+	}
+	body := bytes.TrimSpace(resp.Body)
+	if len(body) == 0 {
+		return nil, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var doc any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, false
+	}
+	out := make(map[string][]string, 32)
+	if !walkValues("", doc, 0, out) {
+		return nil, false
+	}
+	for k := range out {
+		sort.Strings(out[k])
+	}
+	return out, true
+}
+
+// walkValues records the path of every scalar, under the same bounds the shape
+// walker uses so that a hostile body cannot exhaust memory here either.
+func walkValues(path string, v any, depth int, out map[string][]string) bool {
+	if depth > maxShapeDepth || len(out) > maxShapePaths {
+		return false
+	}
+	switch t := v.(type) {
+	case map[string]any:
+		for k, child := range t {
+			if !walkValues(path+"/"+k, child, depth+1, out) {
+				return false
+			}
+		}
+	case []any:
+		for i, child := range t {
+			// Array position is part of the path here, unlike in the shape
+			// walker: two responses agreeing on the value at items[3] is
+			// stronger evidence than agreeing that some element carries it.
+			if !walkValues(fmt.Sprintf("%s/[%d]", path, i), child, depth+1, out) {
+				return false
+			}
+		}
+	case json.Number:
+		out[t.String()] = append(out[t.String()], path)
+	case string:
+		if t != "" {
+			out[t] = append(out[t], path)
+		}
+	}
+	return true
+}

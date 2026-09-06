@@ -17,6 +17,7 @@ import (
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/openapi"
+	"github.com/jaylordibe/application-security-framework/internal/resource"
 )
 
 // Check is the contract the engine consumes.
@@ -82,6 +83,12 @@ type Options struct {
 	// controls. Nil means none is configured, in which case the run behaves
 	// exactly as it did before identities existed.
 	Identities *identity.Set
+	// Resources are the configured resource fixtures. Empty means no
+	// cross-owner work is planned, and the run behaves exactly as it did before
+	// fixtures existed.
+	Resources []resource.Fixture
+	// ResourceCheck runs cross-owner work. Nil disables it.
+	ResourceCheck ResourceCheck
 	// Now supplies the clock, injected so runs are reproducible.
 	Now func() time.Time
 	// EvidenceSink persists a captured exchange and returns a reference to it.
@@ -118,6 +125,9 @@ type Result struct {
 	// Identities records what was known about each configured identity. It
 	// carries no credential, no credential length and no fingerprint.
 	Identities []identity.Status
+	// Ownership accounts for the cross-owner boundaries this run exercised, and
+	// states plainly what they do not cover.
+	Ownership OwnershipSummary
 }
 
 // DimensionOperation is the ledger dimension for assessment work against one
@@ -132,25 +142,36 @@ const DimensionOperation = "operation"
 // run in which it was blocked has tested less than a run in which it was not.
 const DimensionIdentity = "identity"
 
-// ExecutedCount returns how many operation checks actually ran.
+// ExecutedCount returns how many assessment checks actually ran.
 //
-// Only the operation dimension is counted. An identity row records whether a
-// credential worked, which is a precondition for assessment rather than an
-// instance of it; counting one would let configuring an identity inflate the
-// number of checks a run claims to have executed.
+// Assessment work is counted; preconditions are not. An identity row records
+// whether a credential worked, which has to happen before anything can be
+// tested but is not itself a test — counting one would let merely configuring an
+// identity inflate the number of checks a run claims to have executed.
+//
+// Cross-owner work does count. It is assessment: a boundary was probed and an
+// answer obtained. Leaving it out produced a run that reported confirmed
+// findings underneath the sentence "this assessment executed no checks", which
+// is precisely the contradiction the assurance statement exists to prevent.
 func (r Result) ExecutedCount() int {
 	return r.countDisposition(model.DispositionExecuted)
 }
 
-// BlockedCount returns how many operation checks were blocked.
+// BlockedCount returns how many assessment checks were blocked.
 func (r Result) BlockedCount() int {
 	return r.countDisposition(model.DispositionBlocked)
+}
+
+// IsAssessmentWork reports whether a ledger dimension represents work that tests
+// the target, as opposed to a precondition for testing it.
+func IsAssessmentWork(dimension string) bool {
+	return dimension == DimensionOperation || dimension == DimensionOwnership
 }
 
 func (r Result) countDisposition(d model.Disposition) int {
 	n := 0
 	for _, e := range r.Coverage {
-		if e.Dimension == DimensionOperation && e.Disposition == d {
+		if IsAssessmentWork(e.Dimension) && e.Disposition == d {
 			n++
 		}
 	}
@@ -279,8 +300,13 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 
+	// Cross-owner planning. Fixtures multiply operations by identities, so this
+	// is where growth is bounded; everything not planned gets a ledger row.
+	ownership := planOwnership(opts, lg)
+
 	// Execution.
 	controls := &controlLog{}
+	locks := newFixtureLocks()
 	sem := make(chan struct{}, opts.Concurrency)
 	var wg sync.WaitGroup
 	var failuresMu sync.Mutex
@@ -313,12 +339,12 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			out := j.ck.Run(ctx, j.op)
 			meta := j.ck.Metadata()
 
-			if out.ControlIdentityID != "" {
+			for _, u := range out.ControlsUsed {
 				controls.record(controlUse{
 					subject:    j.op.ID,
 					checkID:    meta.ID,
-					identityID: out.ControlIdentityID,
-					at:         out.ControlAt,
+					identityID: u.IdentityID,
+					at:         u.At,
 				})
 			}
 
@@ -360,6 +386,82 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			}
 		}(j)
 	}
+
+	for i, u := range ownership {
+		if ctx.Err() != nil {
+			for _, remaining := range ownership[i:] {
+				e := remaining.entry()
+				e.Disposition = model.DispositionBlocked
+				e.Cause = model.CauseCancelled
+				e.Detail = "the assessment was cancelled before this cross-owner unit was reached"
+				lg.add(e)
+			}
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(u ownershipUnit) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			// Serialise per fixture: two units observing one resource
+			// concurrently would interleave their reads and writes, and each
+			// would attribute the other's effect to itself.
+			lock := locks.get(u.plan.Fixture.ID)
+			lock.Lock()
+			defer lock.Unlock()
+
+			out := u.rc.RunResource(ctx, u.plan)
+			meta := u.rc.MetadataFor(u.plan)
+
+			for _, cu := range out.ControlsUsed {
+				controls.record(controlUse{
+					subject:    u.plan.Subject(),
+					checkID:    meta.ID,
+					identityID: cu.IdentityID,
+					at:         cu.At,
+					resourceID: u.plan.Fixture.ID,
+				})
+			}
+
+			refs, sinkErrs := storeExchanges(opts.EvidenceSink, out.Exchanges)
+			for _, e := range sinkErrs {
+				failuresMu.Lock()
+				failures["evidence: "+e] = struct{}{}
+				failuresMu.Unlock()
+			}
+
+			entry := u.entry()
+			entry.Disposition = out.Disposition
+			entry.Cause = out.Cause
+			entry.Detail = out.Detail
+			entry.EvidenceRefs = refs
+			lg.add(entry)
+
+			if out.ToolFailure != "" {
+				failuresMu.Lock()
+				failures[meta.ID+": "+out.ToolFailure] = struct{}{}
+				failuresMu.Unlock()
+			}
+			if out.Disposition == model.DispositionBlocked && out.Cause == model.CauseTransportError {
+				failuresMu.Lock()
+				failures[meta.ID+": "+out.Detail] = struct{}{}
+				failuresMu.Unlock()
+			}
+
+			if out.Finding != nil {
+				f := *out.Finding
+				f.ID = ownershipFindingID(meta.ID, u.plan)
+				if len(f.EvidenceRefs) == 0 {
+					f.EvidenceRefs = refs
+				}
+				findingsMu.Lock()
+				findings = append(findings, f)
+				findingsMu.Unlock()
+			}
+		}(u)
+	}
+
 	wg.Wait()
 
 	// Probe each identity again now that the work is done.
@@ -375,10 +477,12 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	res.Identities = opts.Identities.Statuses()
 	res.Coverage = append(res.Coverage, identityCoverage(res.Identities)...)
 	invalidateExpiredControls(&res, controls.snapshot(), res.Identities)
+	res.Ownership = summariseOwnership(res.Coverage)
+	res.Ownership.Findings = ownershipFindings(res.Findings)
 	for f := range failures {
 		res.ToolFailures = append(res.ToolFailures, f)
 	}
-	res.ClassesNotAssessed = classesNotAssessed(opts.Checks)
+	res.ClassesNotAssessed = qualifyOwnershipClasses(classesNotAssessed(opts.Checks), res.Ownership)
 	res.FinishedAt = opts.Now()
 
 	sortResult(&res)
@@ -495,6 +599,9 @@ type controlUse struct {
 	checkID    string
 	identityID string
 	at         time.Time
+	// resourceID is set for cross-owner work, whose rows are keyed by resource
+	// as well as by operation.
+	resourceID string
 }
 
 // controlLog accumulates control usage from concurrent checks.
@@ -618,7 +725,7 @@ func invalidateExpiredControls(res *Result, uses []controlUse, statuses []identi
 		return
 	}
 
-	type key struct{ subject, checkID string }
+	type key struct{ subject, checkID, resourceID string }
 	affected := make(map[key]identity.Status)
 	for _, u := range uses {
 		st, bad := windows[u.identityID]
@@ -631,7 +738,7 @@ func invalidateExpiredControls(res *Result, uses []controlUse, statuses []identi
 		if !u.at.IsZero() && !lastGood.IsZero() && !u.at.After(lastGood) {
 			continue
 		}
-		affected[key{u.subject, u.checkID}] = st
+		affected[key{u.subject, u.checkID, u.resourceID}] = st
 	}
 	if len(affected) == 0 {
 		return
@@ -639,10 +746,10 @@ func invalidateExpiredControls(res *Result, uses []controlUse, statuses []identi
 
 	for i := range res.Coverage {
 		e := &res.Coverage[i]
-		if e.Dimension != DimensionOperation {
+		if e.Dimension != DimensionOperation && e.Dimension != DimensionOwnership {
 			continue
 		}
-		st, hit := affected[key{e.Subject, e.CheckID}]
+		st, hit := affected[key{e.Subject, e.CheckID, e.ResourceID}]
 		if !hit {
 			continue
 		}
@@ -656,7 +763,7 @@ func invalidateExpiredControls(res *Result, uses []controlUse, statuses []identi
 
 	for i := range res.Findings {
 		f := &res.Findings[i]
-		st, hit := affected[key{f.OperationID, f.CheckID}]
+		st, hit := affected[key{f.OperationID, f.CheckID, f.ResourceID}]
 		if !hit {
 			continue
 		}
@@ -679,4 +786,13 @@ func lastGoodLabel(st identity.Status) string {
 		return "no point at all — the identity was never confirmed good"
 	}
 	return st.LastGood.UTC().Format(time.RFC3339)
+}
+
+// ownershipFindingID builds a stable identifier for a cross-owner finding.
+//
+// It includes the resource and the non-owner, because the same operation can
+// produce a different finding for a different resource or a different identity,
+// and a consumer deduplicating on the id would otherwise lose all but one.
+func ownershipFindingID(checkID string, p check.ResourcePlan) string {
+	return strings.Join([]string{checkID, p.Subject(), p.Fixture.ID, attackerID(p)}, ":")
 }

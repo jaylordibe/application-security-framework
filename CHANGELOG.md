@@ -74,6 +74,60 @@ consumer can detect a change rather than misparse.
   equivalent and confirmed a bypass that did not exist. Found by review, reproduced by test,
   and the test fails without the guard.
 
+### Added — M2: two identities and one owned resource (BOLA)
+
+- `internal/resource`: a framework-neutral resource fixture — a stable id, an owner
+  identity, a required cross-owner expectation, the values that fill an operation's
+  declared parameters, and provenance. It carries no notion of a primary key, foreign key
+  or tenant column, because the two reference applications disagree about all of them.
+- Safe parameter binding. Values that could change a URL's shape are refused at load
+  rather than escaped; binding works from the parsed parameter list, encodes exactly once,
+  and re-parses the finished URL to check the origin is unchanged.
+- `cross-owner-resource-read`: owner control, cross-owner probe, owner re-check. A denial
+  is verified only when the owner could read the resource both before and after and both
+  identities are live. A finding is confirmed only when the non-owner's response is
+  materially equivalent to the owner's **and** can be tied to that specific resource.
+- `cross-owner-resource-write`: read as the owner, write as the non-owner, read as the
+  owner again. Confirmed only when the owner's own view changed, field by field. Requires
+  the intrusive profile, `authorizeIntrusive`, and an explicit `mutation` block. The
+  changed fields are restored as the owner and the restoration is verified; a failure
+  becomes run-level tool state.
+- A third coverage dimension, `ownership`, keyed by resource and owner as well as by
+  operation and identity, so two boundaries differing only in the resource cannot collapse
+  into one row. The summary lists the tuples exercised and carries no percentage.
+- Resource fixtures also make parameterised operations testable by the declared-auth
+  check, which previously reported every one of them as untestable.
+- `resources` in `appsec.yaml` with JSON Schema validation, and an `ownership` section in
+  the JSON report and SARIF run properties.
+- Paired evaluation fixtures: vulnerable and secure applications differing only in whether
+  the read is scoped by caller, plus 403 denial, application-error-code denial, shared
+  resources, four misleading-200 responses, unreachable fixtures, dead owner and dead
+  attacker identities, mid-test resource disappearance, parameter injection, malicious
+  redirects, credential isolation under `-race`, and vulnerable/secure/fake-success
+  mutation.
+
+### Corrected
+
+- The M2 acceptance criterion "owner `200` + other `404` is a **proven** denial" was not
+  sufficient and has been revised in the roadmap with the evidence. A dead non-owner
+  credential, or a resource deleted between the two requests, produces the same pair with
+  no access control involved. Verified denials now additionally require both identities to
+  be live and an owner re-check after the probe. Removing the re-check makes a
+  disappearing fixture report as a verified denial, and the test asserting that is in the
+  suite.
+- Executed and blocked counts now include cross-owner work. Filtering them to the
+  operation dimension alone produced a run that reported two confirmed findings underneath
+  the sentence "this assessment executed no checks", which is precisely the contradiction
+  the assurance statement exists to prevent.
+
+### Security hardening found by adversarial review of M2
+
+- Refuse to treat a truncated body as resource-identity evidence. Two responses whose
+  captured prefixes agree may diverge in the part that was cut, so a prefix match is not
+  proof that they describe the same resource.
+- Refuse to confirm on a cached owner or cross-owner response, which an intermediary may
+  have replayed from the other identity's request.
+
 ### Changed
 
 - Adopted the project's final identity: product **Application Security Framework**,

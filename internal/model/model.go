@@ -394,8 +394,13 @@ type Finding struct {
 	OWASP       []string
 	OperationID string
 	IdentityID  string
-	Expected    string
-	Actual      string
+	// ResourceID names the resource fixture a cross-owner finding is about, and
+	// OwnerIdentityID the identity that owns it. Both are empty for findings
+	// that are not about a specific resource.
+	ResourceID      string
+	OwnerIdentityID string
+	Expected        string
+	Actual          string
 	// EvidenceRefs reference stored evidence rather than embedding copies.
 	EvidenceRefs []string
 	Verification VerificationRecord
@@ -466,10 +471,22 @@ type CoverageEntry struct {
 	// Dimension names what is covered, e.g. "operation".
 	Dimension string
 	// Subject identifies the thing covered within that dimension.
-	Subject     string
-	CheckID     string
+	Subject string
+	CheckID string
+	// IdentityID names the identity the work was performed as. For cross-owner
+	// work this is the non-owner: the identity whose access was in question.
 	IdentityID  string
 	Disposition Disposition
+	// ResourceID names the resource fixture this work addressed, and
+	// OwnerIdentityID the identity that owns it. Both are empty for work that is
+	// not about a specific resource.
+	//
+	// They are part of the ledger key rather than prose, because "identity B
+	// cannot read resource X" and "identity B cannot read resource Y" are
+	// different results and collapsing them would let one tested boundary stand
+	// in for an untested one.
+	ResourceID      string
+	OwnerIdentityID string
 	// Cause is required when Disposition is blocked.
 	Cause  BlockedCause
 	Detail string
@@ -480,8 +497,14 @@ type CoverageEntry struct {
 }
 
 // Key returns the ledger key for an entry.
+//
+// The resource and its owner are part of the key. Without them, two cross-owner
+// rows differing only in which resource was probed would collide, and the ledger
+// would silently report one boundary as standing for both.
 func (e CoverageEntry) Key() string {
-	return strings.Join([]string{e.Dimension, e.Subject, e.CheckID, e.IdentityID}, "\x00")
+	return strings.Join([]string{
+		e.Dimension, e.Subject, e.CheckID, e.IdentityID, e.ResourceID, e.OwnerIdentityID,
+	}, "\x00")
 }
 
 // CapturedRequest is a request as it was sent, after redaction. It lives in

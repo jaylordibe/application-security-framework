@@ -232,6 +232,87 @@
         }
       }
     },
+    "resources": {
+      "type": "array",
+      "description": "Concrete resources known to belong to an identity, used to test whether a non-owner can reach or change them. A fixture is what makes a cross-owner probe meaningful: without one, addressing /api/orders/{orderId} means inventing an identifier and reading a 404 that says nothing about authorization.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "owner",
+          "crossOwnerAccess",
+          "values"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "description": "Stable fixture name used in the coverage ledger and reports."
+          },
+          "type": {
+            "type": "string",
+            "description": "Logical label such as \"order\". Descriptive only; nothing branches on it."
+          },
+          "owner": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "description": "The identities[].id that owns this resource."
+          },
+          "crossOwnerAccess": {
+            "enum": [
+              "denied",
+              "allowed"
+            ],
+            "description": "Required. \"denied\" means non-owners must not reach the resource, which is the boundary a BOLA check tests. \"allowed\" means the resource is legitimately shared, so a non-owner reaching it is expected and is never a finding."
+          },
+          "values": {
+            "type": "object",
+            "minProperties": 1,
+            "description": "Values that fill the operation's declared parameters, keyed by parameter name. Each fills exactly one path segment and may not contain a path separator, a query or fragment delimiter, an authority delimiter, a percent sign or a control character.",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^/\\\\?#%@\\x00-\\x1f\\x7f]+$"
+            },
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$"
+            }
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional allowlist of operation ids (\"GET /api/orders/{orderId}\"). Empty means every operation whose required path parameters this fixture can fill."
+          },
+          "nonOwners": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            "description": "Optional allowlist of identities that probe this fixture. Empty means every configured identity except the owner."
+          },
+          "mutation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "values"
+            ],
+            "description": "Enables cross-owner write testing. Writes require the intrusive profile and explicit authorizeIntrusive, and a write is confirmed only by re-reading as the owner: an HTTP success never confirms one.",
+            "properties": {
+              "values": {
+                "type": "object",
+                "minProperties": 1,
+                "description": "Explicit field/value pairs sent as a JSON object. Not a payload language."
+              }
+            }
+          }
+        }
+      }
+    },
     "discovery": {
       "type": "object",
       "additionalProperties": false,

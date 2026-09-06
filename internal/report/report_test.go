@@ -341,3 +341,49 @@ func TestAuthenticatedControlStatement(t *testing.T) {
 		})
 	}
 }
+
+// A cross-owner finding is the most quotable thing this tool produces and the
+// extent behind it is the least visible. The terminal summary — not only the
+// JSON — has to carry the caveat, or an operator will generalise one tested
+// boundary into a statement about the whole application.
+func TestSummaryStatesOwnershipExtent(t *testing.T) {
+	res := engine.Result{
+		RunID: "r", Target: "http://localhost:3000", Profile: model.ProfileVerification,
+		Surface: engine.Surface{SpecDerived: true},
+		Coverage: []model.CoverageEntry{{
+			Dimension: engine.DimensionOwnership, Subject: "GET /api/orders/{orderId}",
+			CheckID: "cross-owner-resource-read", IdentityID: "bob",
+			ResourceID: "order-alice", OwnerIdentityID: "alice",
+			Disposition: model.DispositionExecuted,
+		}},
+		Ownership: engine.OwnershipSummary{
+			Verified:   1,
+			Statement:  "This run exercised 1 cross-owner boundary check(s), each named individually.",
+			Boundaries: []string{"bob may not reach order-alice (owned by alice) via GET /api/orders/{orderId}"},
+		},
+	}
+	out := Summary(Build(res, "test"))
+	// The summary wraps for the terminal, so compare on normalized whitespace.
+	flat := strings.Join(strings.Fields(out), " ")
+
+	if !strings.Contains(flat, "ownership boundaries checked: 1") {
+		t.Errorf("the summary does not report ownership work:\n%s", out)
+	}
+	if !strings.Contains(flat, "bob may not reach order-alice (owned by alice)") {
+		t.Errorf("the summary does not name the boundary that was tested:\n%s", out)
+	}
+	if !strings.Contains(flat, "each named individually") {
+		t.Errorf("the summary omits the statement bounding what was tested:\n%s", out)
+	}
+}
+
+// A run with no fixtures must not grow an empty ownership section, which would
+// read as a section that found nothing rather than one that was never asked.
+func TestSummaryOmitsOwnershipWhenNoneWasPlanned(t *testing.T) {
+	out := Summary(Build(engine.Result{
+		RunID: "r", Surface: engine.Surface{SpecDerived: true},
+	}, "test"))
+	if strings.Contains(out, "ownership boundaries") {
+		t.Errorf("an ownership section appeared with no fixtures configured:\n%s", out)
+	}
+}

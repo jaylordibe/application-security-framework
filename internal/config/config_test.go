@@ -346,3 +346,159 @@ func TestConfigurationCannotCarryACredentialValue(t *testing.T) {
 		t.Error("an identity rendered credential material")
 	}
 }
+
+// Resource fixtures address somebody's real data, so every reference and every
+// value is checked before a request can be built from it.
+func TestResourceConfigurationIsValidated(t *testing.T) {
+	const head = "apiVersion: appsec/v1alpha1\n" +
+		"target:\n  baseURL: http://localhost:3000\n" +
+		"identities:\n" +
+		"  - id: user-a\n    authentication:\n      type: bearer\n      credential: {env: A_TOKEN}\n" +
+		"  - id: user-b\n    authentication:\n      type: bearer\n      credential: {env: B_TOKEN}\n"
+
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr string
+	}{
+		{
+			name: "valid fixture",
+			yaml: head + `resources:
+  - id: order-a
+    type: order
+    owner: user-a
+    crossOwnerAccess: denied
+    values:
+      orderId: "abc123"
+`,
+		},
+		{
+			name: "valid shared fixture with mutation",
+			yaml: head + `resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: allowed
+    values: {orderId: "abc123"}
+    operations: ["GET /api/orders/{orderId}"]
+    nonOwners: [user-b]
+    mutation:
+      values:
+        status: "appsec-marker"
+`,
+		},
+		{
+			name: "unknown owner",
+			yaml: head + `resources:
+  - id: order-a
+    owner: ghost
+    crossOwnerAccess: denied
+    values: {orderId: "abc123"}
+`,
+			wantErr: "is not a configured identity",
+		},
+		{
+			name: "missing expectation",
+			yaml: head + `resources:
+  - id: order-a
+    owner: user-a
+    values: {orderId: "abc123"}
+`,
+			wantErr: "crossOwnerAccess",
+		},
+		{
+			name: "duplicate fixture ids",
+			yaml: head + `resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "1"}
+  - id: order-a
+    owner: user-b
+    crossOwnerAccess: denied
+    values: {orderId: "2"}
+`,
+			wantErr: "duplicates",
+		},
+		{
+			name: "traversal in a value",
+			yaml: head + `resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "../../admin"}
+`,
+			wantErr: "path separator",
+		},
+		{
+			name: "empty values",
+			yaml: head + `resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {}
+`,
+			wantErr: "values is required",
+		},
+		{
+			name: "owner listed as its own non-owner",
+			yaml: head + `resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "1"}
+    nonOwners: [user-a]
+`,
+			wantErr: "cannot be its own non-owner",
+		},
+		{
+			name: "mutation with no values",
+			yaml: head + `resources:
+  - id: order-a
+    owner: user-a
+    crossOwnerAccess: denied
+    values: {orderId: "1"}
+    mutation: {}
+`,
+			wantErr: "mutation.values is required",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parse(t, tc.yaml)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("valid configuration rejected: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected an error containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want it to mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// Everything configurable is configured, by definition. Provenance must say so
+// rather than being left blank, because "how do we know who owns this" is a
+// question the report has to answer.
+func TestConfiguredFixturesRecordTheirProvenance(t *testing.T) {
+	cfg, err := parse(t, "apiVersion: appsec/v1alpha1\n"+
+		"target:\n  baseURL: http://localhost:3000\n"+
+		"identities:\n  - id: user-a\n    authentication:\n      type: bearer\n"+
+		"      credential: {env: A_TOKEN}\n"+
+		"resources:\n  - id: order-a\n    owner: user-a\n    crossOwnerAccess: denied\n"+
+		"    values: {orderId: \"1\"}\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	fx := cfg.ResourceFixtures()
+	if len(fx) != 1 {
+		t.Fatalf("fixtures = %d, want 1", len(fx))
+	}
+	if fx[0].Provenance != "configured" {
+		t.Errorf("provenance = %q, want configured", fx[0].Provenance)
+	}
+}

@@ -11,8 +11,9 @@ application's own metadata, observes what it *actually* does, and reports the di
 > produced none.
 > Every report states what was not tested and why. That is the point of the tool.
 
-**Status: early foundation (v0.x).** One check is implemented, now with an authenticated
-control request behind it (M1). Schemas may change before 1.0. See
+**Status: early foundation (v0.x).** Two checks are implemented: declared authentication
+with an authenticated control behind it (M1), and cross-owner resource access (M2).
+Schemas may change before 1.0. See
 [What AppSec Framework does not do yet](#what-appsec-framework-does-not-do-yet) before
 relying on it. It has not been evaluated for precision or recall against a corpus
 of real applications, so no detection-quality claim is made.
@@ -95,7 +96,7 @@ appsec scan http://localhost:3000 --spec ./openapi.json
 appsec scan https://staging.example.com --spec-url https://staging.example.com/openapi.json
 ```
 
-### Identities
+### Identities and owned resources
 
 Give it a credential and it can compare what an anonymous caller received against what a
 legitimate one receives. That comparison is the only way a finding reaches `confirmed`.
@@ -127,6 +128,28 @@ The `liveness` probe is an operation *you* nominate, because guessing `/me` or `
 would produce a 404 on most applications and a 404 is indistinguishable from an expired
 credential. It is what lets a run notice that a token died halfway through instead of
 reporting the resulting sweep of denials as a clean result.
+
+With **two** identities and a resource you know one of them owns, it will test whether the
+other can reach it — broken object-level authorization, the largest class of real API
+findings:
+
+```yaml
+resources:
+  - id: order-alice
+    type: order
+    owner: alice
+    crossOwnerAccess: denied          # required; "allowed" for shared resources
+    values:
+      orderId: "abc123"               # fills GET /api/orders/{orderId}
+```
+
+A fixture also makes a parameterised operation testable at all. Without one,
+`/api/orders/{orderId}` can only be probed by inventing an identifier, and the resulting
+404 says nothing — so it is reported as untestable rather than clean.
+
+`crossOwnerAccess` has no default on purpose. Assuming every owned resource is private
+would report every deliberately shared record — a public profile, a team document — as a
+broken access control.
 
 ### What a run looks like
 
@@ -189,6 +212,23 @@ different only ever leaves it suspected. A finding is raised by an anonymous suc
 never by an authenticated failure, so forgetting to set an environment variable cannot turn
 a vulnerable application green — it produces a blocked identity row and a named gap.
 
+**A cross-owner result needs three requests, not two.** The owner reads the resource, the
+non-owner probes it, and the owner reads it again. The re-check is not padding: without
+it, a record deleted between the first two requests makes the non-owner's 404 look like an
+enforced boundary, and the run would report an untested control as working. Both
+identities must also be live, or a dead token returning 404 to everything would make any
+application look secure.
+
+**A cross-owner finding is confirmed only when the non-owner got *that* resource.** Two
+orders have the same JSON shape, so an application that quietly returns the caller's own
+record would match on shape alone. Confirmation additionally requires the fixture's own
+identifying value at the same field in both responses, or two identical documents.
+
+**A write is confirmed only by the owner's own view changing.** An HTTP 200 for a write
+that was silently discarded is common — it is what a status-only check reports as an
+unauthorized mutation, and it is wrong every time. See
+[ADR-0013](docs/adr/0013-cross-owner-verification-semantics.md).
+
 **`404` counts as a denial.** Returning not-found for a resource the caller may not see is
 a legitimate anti-enumeration pattern; treating it as a distinct outcome would report good
 security design as a bug.
@@ -229,8 +269,14 @@ commit `.appsec/`.
 
 Being specific about this is part of the product.
 
-- **No BOLA/IDOR, tenancy, or cross-identity testing.** The single largest class of real
-  API findings. Next milestone; see [the roadmap](docs/roadmap.md).
+- **BOLA testing needs you to name the resource.** Fixtures are configured, not
+  discovered: you must know one identifier belonging to one identity. Creating resources
+  through the application's own API is deferred to environment provisioning, so M2 is
+  marked partial in [the roadmap](docs/roadmap.md).
+- **No tenancy, function-level authorization, or privilege escalation.** One owner, one
+  non-owner, one resource is the whole primitive.
+- **No cross-owner `DELETE`.** It destroys the fixture and proves nothing a `PATCH` does
+  not.
 - **No engine integrations.** ZAP, Nuclei, Semgrep and Hadrian are designed as optional
   subprocesses ([ADR-0005](docs/adr/0005-external-engines-are-subprocesses.md)) but none is
   implemented. `appsec doctor` reports what is on your PATH.
@@ -293,6 +339,7 @@ authentication bypass — a silent pass is the worst possible default for a secu
 | [Ecosystem research](docs/research/ecosystem.md) | ZAP, Nuclei, Semgrep, Playwright, Hadrian — licences and findings |
 | [Reference applications](docs/research/reference-applications.md) | the evidence behind the design |
 | [Threat model](docs/security/threat-model.md) | this framework's own attack surface |
+| [Cross-owner integration](docs/evaluation/cross-owner-integration.md) | running M2 against the two reference APIs |
 | [ADRs](docs/adr/) | consequential decisions and their alternatives |
 | [Roadmap](docs/roadmap.md) | what is next, and what is explicitly out |
 

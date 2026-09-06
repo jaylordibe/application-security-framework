@@ -254,6 +254,10 @@ func WriteSARIF(w io.Writer, doc Document) error {
 				// SARIF file as a clean result. The DTO carries no credential.
 				"identities":           doc.Identities,
 				"authenticatedControl": doc.Assurance.AuthenticatedControl,
+				// Ownership travels here for the same reason coverage does:
+				// SARIF cannot say "these boundaries were never tested", and a
+				// consumer reading a clean file must not conclude they were.
+				"ownership": doc.Ownership,
 			},
 		}},
 	}

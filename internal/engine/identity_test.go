@@ -18,14 +18,31 @@ func TestCountersIgnoreTheIdentityDimension(t *testing.T) {
 	res := Result{Coverage: []model.CoverageEntry{
 		{Dimension: DimensionOperation, Disposition: model.DispositionExecuted},
 		{Dimension: DimensionOperation, Disposition: model.DispositionBlocked},
+		// Cross-owner work is assessment and must be counted: a run that
+		// probed a boundary has not "executed no checks".
+		{Dimension: DimensionOwnership, Disposition: model.DispositionExecuted},
+		{Dimension: DimensionOwnership, Disposition: model.DispositionBlocked},
+		// Identity rows are preconditions and must not be.
 		{Dimension: DimensionIdentity, Disposition: model.DispositionExecuted},
 		{Dimension: DimensionIdentity, Disposition: model.DispositionBlocked},
 	}}
-	if got := res.ExecutedCount(); got != 1 {
-		t.Errorf("ExecutedCount = %d, want 1", got)
+	if got := res.ExecutedCount(); got != 2 {
+		t.Errorf("ExecutedCount = %d, want 2", got)
 	}
-	if got := res.BlockedCount(); got != 1 {
-		t.Errorf("BlockedCount = %d, want 1", got)
+	if got := res.BlockedCount(); got != 2 {
+		t.Errorf("BlockedCount = %d, want 2", got)
+	}
+}
+
+// A run that confirmed a cross-owner finding must never also say it executed
+// nothing. The two statements together are worse than either alone.
+func TestARunWithOwnershipFindingsIsNotReportedAsHavingExecutedNothing(t *testing.T) {
+	res := Result{Coverage: []model.CoverageEntry{
+		{Dimension: DimensionOwnership, Subject: "GET /a", ResourceID: "r1",
+			Disposition: model.DispositionExecuted},
+	}}
+	if res.ExecutedCount() == 0 {
+		t.Fatal("a run that probed an ownership boundary reported executing no checks")
 	}
 }
 

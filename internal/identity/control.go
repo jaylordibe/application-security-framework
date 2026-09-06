@@ -177,6 +177,22 @@ func (c *Control) Usable() (bool, model.BlockedCause, string) {
 // than an anonymous one can. Redirects are not followed, so a credential is
 // never replayed to a Location the target chose.
 func (c *Control) Do(ctx context.Context, method, url string, extra map[string][]string) (model.Exchange, error) {
+	return c.DoWithBody(ctx, method, url, extra, nil)
+}
+
+// DoWithBody is Do with a request body, for the state-changing requests a
+// cross-owner write check makes.
+//
+// The header map is rebuilt from scratch on every call and the caller's map is
+// copied rather than adopted, so no request can observe or alter another's
+// headers. That is the isolation guarantee two identities running concurrently
+// depend on.
+func (c *Control) DoWithBody(
+	ctx context.Context,
+	method, url string,
+	extra map[string][]string,
+	body []byte,
+) (model.Exchange, error) {
 	header := make(map[string][]string, len(extra)+2)
 	for k, v := range extra {
 		cp := make([]string, len(v))
@@ -186,7 +202,7 @@ func (c *Control) Do(ctx context.Context, method, url string, extra map[string][
 	for k, v := range c.Headers() {
 		header[k] = v
 	}
-	return c.client.Do(ctx, httpx.Request{Method: method, URL: url, Header: header})
+	return c.client.Do(ctx, httpx.Request{Method: method, URL: url, Header: header, Body: body})
 }
 
 // NoteSuspicious reports that an authenticated request produced a result
