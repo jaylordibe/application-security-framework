@@ -58,6 +58,33 @@ func validateAgainstSchema(t *testing.T, schema *jsonschema.Schema, doc string) 
 
 // validDocuments must be accepted by both the parser and the schema.
 var validDocuments = map[string]string{
+	"surface discovery, every field set": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://localhost:3000
+discovery:
+  openAPIFile: ./openapi.json
+  surface:
+    enabled: true
+    linkHeaders: true
+    robots: true
+    javascript: false
+    wellKnown: true
+    maxRequests: 10
+    maxScripts: 2
+    maxBytes: 1048576
+    maxCandidates: 50
+    assessAdapterDiscovered: false
+`,
+	"surface discovery turned off entirely": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://localhost:3000
+discovery:
+  openAPIFile: ./openapi.json
+  surface:
+    enabled: false
+`,
 	"resource fixture": `
 apiVersion: appsec/v1alpha1
 target:

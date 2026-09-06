@@ -551,6 +551,75 @@ engine, not to this project.
 
 ---
 
+## 11a. Surface beyond the specification (M5)
+
+`internal/discovery` closes the gap between "coverage of the specification" and
+"coverage of the application". Before it, a route the specification omitted
+contributed no ledger row at all: it was not untested, it was invisible.
+
+### What it reads, and the complete list of what it requests
+
+```
+target root  ──(Link headers)──────────────► path candidates
+     │        └(<script src> only)──► same-origin scripts ──(literals)──► path candidates
+     ├── /robots.txt ─────────────────────────────────────────────────► path candidates
+     └── 5 well-known metadata documents ───────────────────────────► path candidates
+```
+
+That diagram is exhaustive. One function makes requests, it has four call sites,
+and **nothing discovered is ever fetched** — the set of URLs discovery will
+request is fixed before any target output is read. That is what makes SSRF a
+non-question here rather than a control to audit.
+
+It is not a crawler and cannot be configured into one: no anchors, no forms, no
+iframes, no sitemap, no source maps, no script-inside-a-script, no recursion, no
+queue, no depth, no wordlist.
+
+### Path candidates are not operations
+
+`model.PathCandidate` carries a path, provenance, and a method *only when a
+source established one*. An `Operation` has a method by definition; a discovered
+string does not, and inventing one would produce an invented request and an
+invented conclusion. The identity of a method-less candidate is `path /x`, which
+cannot collide with the operation `GET /x`.
+
+The single exception runs through a framework adapter: an adapter that reports
+`GET /hidden` read the routing table, so the method is known and the expectation
+comes from the same source that would have supplied it had the route been
+documented. Those are adopted into the assessed surface behind a switch.
+
+### Merging
+
+One route named by the specification, an adapter and a bundle is **one** surface
+item with three sources. Concrete URLs match templated operations segment-wise,
+so `/api/users/42` corroborates `GET /api/users/{id}` rather than appearing as an
+undocumented route — without that, every identifier a bundle embeds would fill
+the undocumented list with noise.
+
+### The ledger, and what discovery does not create
+
+Dimension `path`, disposition `untested`, cause `not_in_specification`, counted
+in the headline untested figure — because "surface that exists and was not
+assessed" is exactly what that counter means.
+
+No security expectation is ever derived from a name. `/admin` is a string, and
+`Disallow: /admin` is a request to search engines. Discovery improves the account
+of what was not assessed; it creates no expectations.
+
+### Bounded, deterministic, and honest about stopping
+
+Every parser is a single-pass scanner with no regular expression, because the
+input is a target-controlled string of arbitrary size. Budgets bound requests,
+bytes, scripts and candidates at four levels, and incompleteness propagates from
+every level to the result: a truncated pass can never report itself as a finished
+one. Discovery is sequential and its output sorted, so the ledger does not depend
+on scheduling.
+
+No completeness percentage is produced anywhere. There is no denominator, and
+inventing one would be this project's own thesis failing about its own coverage.
+
+---
+
 ## 12. Failure semantics
 
 - An engine crash is an engine crash. It becomes a blocked coverage entry and a recorded
@@ -563,9 +632,8 @@ engine, not to this project.
 
 ## 13. What is intentionally missing
 
-Discovery beyond specification ingestion; any external engine integration; identity and
-authentication providers; the adversarial authorization engine; tenancy; workflows;
-SQLite; the dashboard; AI.
+A crawler or API-inventory product; the adversarial authorization engine; tenancy;
+workflows; environment provisioning; assessment comparison; SQLite; the dashboard; AI.
 
 Each is absent because building it now would mean shipping an unproven abstraction. The
 seams are documented so the additions are leaves rather than rewrites.

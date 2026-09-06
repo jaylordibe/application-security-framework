@@ -15,6 +15,7 @@ import (
 
 	"github.com/jaylordibe/application-security-framework/internal/adapter"
 	"github.com/jaylordibe/application-security-framework/internal/check"
+	"github.com/jaylordibe/application-security-framework/internal/discovery"
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/openapi"
@@ -64,6 +65,37 @@ type Surface struct {
 	AdapterFailures    []string
 	AdapterLimitations []string
 	AdapterUnmatched   []string
+
+	// Discovery is what the application revealed about itself beyond any
+	// specification: paths found in Link headers, robots.txt, its own
+	// JavaScript and standardized metadata documents.
+	//
+	// These are deliberately not Operations. They have no method and no
+	// expectation, so nothing can be planned against them; what they change is
+	// the account of what was not assessed, which before this existed had no
+	// row at all for a route the specification omitted.
+	Discovered []model.PathCandidate
+	// DiscoveryCorroborated records discovered paths that a known operation
+	// already covers, so one route named by three artefacts stays one route.
+	DiscoveryCorroborated []discovery.Corroboration
+	// DiscoveryOffOrigin are references to other origins, recorded and never
+	// contacted.
+	DiscoveryOffOrigin []model.PathCandidate
+	// DiscoveryAttempts records every source consulted, including those that
+	// could not be. A source that failed and a source that found nothing must
+	// never read the same.
+	DiscoveryAttempts []discovery.Attempt
+	// DiscoveryIncomplete reports that a budget stopped discovery early.
+	DiscoveryIncomplete bool
+	// DiscoveryLimitations are what discovery could not establish.
+	DiscoveryLimitations []string
+	// DiscoveryRequests and DiscoveryBytes record what discovery cost the
+	// target, so an operator can see the traffic this feature generated.
+	DiscoveryRequests int
+	DiscoveryBytes    int64
+	// AdapterDiscovered names operations an adapter found outside the
+	// specification that were adopted into the assessed surface.
+	AdapterDiscovered []string
 }
 
 // Environment records operator-stated differences from production.
@@ -158,6 +190,16 @@ const DimensionOperation = "operation"
 // run in which it was blocked has tested less than a run in which it was not.
 const DimensionIdentity = "identity"
 
+// DimensionPath is the ledger dimension for a discovered path that no
+// specification or adapter describes.
+//
+// It is a separate dimension from operations because the subjects are different
+// kinds of thing: an operation row says "this callable unit was or was not
+// checked", and a path row says "this exists and nothing was planned against
+// it". Collapsing them would require giving every discovered path a method, and
+// an invented method produces an invented request and an invented conclusion.
+const DimensionPath = "path"
+
 // ExecutedCount returns how many assessment checks actually ran.
 //
 // Assessment work is counted; preconditions are not. An identity row records
@@ -183,6 +225,11 @@ func (r Result) BlockedCount() int {
 func IsAssessmentWork(dimension string) bool {
 	return dimension == DimensionOperation ||
 		dimension == DimensionOwnership ||
+		// A discovered path is surface that exists and was not assessed, which
+		// is precisely what the untested counter means. Excluding it would
+		// leave the headline number measuring only the surface the application
+		// chose to document — the exact blind spot discovery exists to close.
+		dimension == DimensionPath ||
 		// An external engine run is assessment: it was planned work against the
 		// target. Leaving it out produced a summary reading "blocked: 0" while
 		// three engines had failed, which understates exactly the thing this
@@ -510,6 +557,17 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	// this tool could conceivably have been configured to do.
 	res.Engines = opts.Engines
 	res.Coverage = append(res.Coverage, opts.Engines.Coverage...)
+
+	// Discovered surface joins the ledger as untested work.
+	//
+	// This is the whole mechanism of the milestone. A path the specification
+	// omits previously contributed no row at all, so it could not be counted or
+	// missed — it was not untested, it was invisible. One row each makes it
+	// visible without making it testable: nothing was planned against these,
+	// because planning needs a method and an expectation and a discovered path
+	// has neither.
+	res.Coverage = append(res.Coverage,
+		discovery.CoverageRows(DimensionPath, opts.Surface.Discovered)...)
 	res.Findings = append(res.Findings, opts.Engines.Findings...)
 	res.ToolFailures = append(res.ToolFailures, opts.Engines.Failures...)
 	for f := range failures {

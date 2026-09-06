@@ -206,6 +206,67 @@ consumer can detect a change rather than misparse.
 - The CI check forbidding Semgrep registry rule packs matched the code that refuses them.
   A mention must now be annotated as a refusal; anything else still fails.
 
+### Added — M5: surface beyond the specification
+
+- `internal/discovery`: undocumented surface from four artefacts the application publishes
+  about itself — RFC 8288 `Link` headers on the target's own root response, `robots.txt`,
+  path literals in the same-origin JavaScript that root document references, and five
+  standardized metadata documents. Every path outside the specification becomes one ledger
+  row: dimension `path`, disposition `untested`, cause `not_in_specification`, counted in
+  the headline untested figure.
+- `model.PathCandidate`, a type smaller than `Operation`, carrying a path, provenance and a
+  method *only when a source established one*. A discovered string never becomes a `GET`.
+- `scope.Origin`, so discovery answers "is this the target's own origin?" with the same
+  normalization the allowlist uses. Scope may authorize several hosts; a link on the target
+  is not authorization to visit one of them.
+- Provenance-aware merging: one route named by the specification, an adapter and a bundle
+  is one surface item with three sources. Concrete URLs corroborate templated operations
+  segment-wise, so `/api/users/42` confirms `GET /api/users/{id}` instead of being reported
+  as an undocumented route.
+- Operations a framework adapter reports that the specification omits are now assessed,
+  under `discovery.surface.assessAdapterDiscovered`. M3 recorded them and deferred them to
+  a milestone with its own safety questions; the questions have answers, because the method
+  comes from the routing table and the expectation from the same adapter.
+- Budgets on requests, bytes, scripts and candidates, at four levels. Incompleteness
+  propagates from every level to the result, so a truncated pass can never report itself
+  as a finished one.
+- Discovered URLs keep their path and nothing else. The query and fragment are dropped at
+  normalization rather than filtered by a list of parameter names, so a session token or a
+  signed parameter in a bundle cannot reach the report.
+- A `discovery` section in the JSON report and a terminal block distinguishing declared,
+  adapter-only and discovered surface. SARIF gains discovered paths as coverage rows only:
+  an undocumented route is inventory, not a vulnerability, and is not reported as a result.
+- An adversarial discovery suite: hostile `Link` headers, multi-megabyte bundles under a
+  wall-clock deadline, candidate explosions, malformed robots.txt, off-origin links and
+  scripts, cloud-metadata references, credential-bearing URLs, redirect chains and a
+  fixture whose every page links onward.
+
+### Not added, deliberately
+
+- No crawler. Discovery reads one page and the scripts that page names, and never fetches
+  anything it discovered. No anchors, forms, iframes, sitemap, source maps, recursion,
+  queue, depth setting or wordlist — and no configuration that could express one.
+- No completeness percentage. There is no denominator, and inventing one would be this
+  project's own thesis failing about its own coverage.
+- No security expectation derived from a path name. `/admin` is a string and
+  `Disallow: /admin` is a request to search engines.
+
+### Corrected — M5
+
+- `assurance.surfaceCompleteness` stated flatly that undocumented routes "were not
+  discovered, are not counted here, and were not tested". After a pass that finds nine of
+  them, that is a report contradicting its own contents. It now reflects what the run
+  actually did, including whether discovery ran at all.
+- The `Link` parser scanned greedily to the next `>`, so a malformed member swallowed the
+  valid one after it: `<not-a-link; rel=x, </good>; rel="next"` yielded one bogus link and
+  lost `/good`. A URI-Reference contains no `<`, `>`, whitespace, quote or comma, so the
+  scan now stops at the first character that cannot appear in one.
+- A per-source truncation marked the source truncated but left the whole result
+  "complete". A limit reached anywhere means there was more to find, and the result now
+  says so.
+- `Limits.MaxScripts` normalized with `< 0` rather than `<= 0`, so the zero value fetched
+  no scripts while still reporting that the JavaScript source had run.
+
 ### Corrected — stale documentation
 
 - The README claimed "One identity at a time… comparing one against another — BOLA, IDOR,

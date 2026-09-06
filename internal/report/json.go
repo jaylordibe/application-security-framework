@@ -239,6 +239,73 @@ type Surface struct {
 	Oracle         Oracle   `json:"oracle"`
 	ExternalRefs   []string `json:"refusedExternalReferences,omitempty"`
 	Warnings       []string `json:"warnings,omitempty"`
+	// Discovery accounts for surface the specification does not describe.
+	Discovery DiscoveryAccount `json:"discovery"`
+}
+
+// DiscoveryAccount is what discovery of undocumented surface established.
+//
+// There is deliberately no percentage anywhere in this structure. A completeness
+// figure needs a denominator, and the total number of routes an application
+// serves is precisely the unknown this whole feature exists because of.
+// "12 paths found" is a fact; "80% of the surface discovered" would be a number
+// invented to look like one.
+type DiscoveryAccount struct {
+	// Statement says in words what these numbers do and do not mean.
+	Statement string `json:"statement"`
+	// SpecificationOperations counts operations the specification declared.
+	SpecificationOperations int `json:"specificationOperations"`
+	// AdapterOperations counts operations a framework adapter found that the
+	// specification omits, and which were adopted into the assessed surface.
+	AdapterOperations []string `json:"adapterOperations,omitempty"`
+	// PathCandidates are discovered paths no source describes.
+	PathCandidates []PathCandidate `json:"pathCandidates,omitempty"`
+	// Corroborated records discovered paths that a known operation covers.
+	Corroborated []Corroboration `json:"corroborated,omitempty"`
+	// OffOriginReferences are URLs the application pointed at outside its own
+	// origin. They were recorded and never contacted.
+	OffOriginReferences []PathCandidate `json:"offOriginReferences,omitempty"`
+	// Sources records each discovery source and what it did.
+	Sources []DiscoverySource `json:"sources,omitempty"`
+	// Incomplete reports that a budget stopped discovery. When true, every
+	// count above is a floor.
+	Incomplete bool `json:"incomplete"`
+	// Limitations are what discovery could not establish.
+	Limitations []string `json:"limitations,omitempty"`
+	// Requests and Bytes record what discovery cost the target.
+	Requests int   `json:"requests"`
+	Bytes    int64 `json:"bytes"`
+}
+
+// PathCandidate is one discovered path.
+type PathCandidate struct {
+	// Path is structural only: no query string and no fragment, because a
+	// discovered URL is a likely place to find a token or a signed parameter.
+	Path string `json:"path,omitempty"`
+	// Method is present only when a source genuinely established one. It is
+	// never inferred from the path.
+	Method string `json:"method,omitempty"`
+	// Reference is the off-origin URL, for references outside the target.
+	Reference string   `json:"reference,omitempty"`
+	Sources   []Source `json:"sources"`
+}
+
+// Corroboration links a discovered path to the operation it confirms.
+type Corroboration struct {
+	OperationID string   `json:"operationId"`
+	Path        string   `json:"path"`
+	Sources     []Source `json:"sources"`
+}
+
+// DiscoverySource records one source's outcome.
+type DiscoverySource struct {
+	Kind string `json:"kind"`
+	// Consulted reports whether the source was actually read. A source that
+	// could not be reached and a source that found nothing are different facts.
+	Consulted bool   `json:"consulted"`
+	Found     int    `json:"found"`
+	Truncated bool   `json:"truncated,omitempty"`
+	Problem   string `json:"problem,omitempty"`
 }
 
 // Source records where a fact came from.
@@ -371,6 +438,7 @@ func Build(res engine.Result, version string) Document {
 			},
 			ExternalRefs: res.Surface.ExternalRefs,
 			Warnings:     res.Surface.Warnings,
+			Discovery:    buildDiscovery(res),
 		},
 		Findings:           make([]Finding, 0, len(res.Findings)),
 		Identities:         make([]Identity, 0, len(res.Identities)),
@@ -498,14 +566,7 @@ func buildAssurance(res engine.Result) Assurance {
 		}
 	}
 
-	if res.Surface.SpecDerived {
-		a.SurfaceCompleteness = "This ledger enumerates only the operations declared in the " +
-			"specification AppSec Framework was given. Routes that exist but are not documented were not " +
-			"discovered, are not counted here, and were not tested. Coverage is therefore relative " +
-			"to the specification, not to the application."
-	} else {
-		a.SurfaceCompleteness = "No specification was available, so no attack surface was enumerated."
-	}
+	a.SurfaceCompleteness = surfaceCompletenessStatement(res)
 
 	a.AuthenticatedControl = authenticatedControlStatement(res)
 
@@ -663,6 +724,125 @@ func authenticatedControlStatement(res engine.Result) string {
 	}
 }
 
+// surfaceCompletenessStatement explains the limits of the denominator.
+//
+// It has to change with what the run actually did. Before discovery existed the
+// statement could say flatly that undocumented routes were not found, because
+// none ever was; saying that after a pass that found nine of them would be a
+// report contradicting its own contents.
+func surfaceCompletenessStatement(res engine.Result) string {
+	sf := res.Surface
+	if !sf.SpecDerived {
+		return "No specification was available, so no attack surface was enumerated."
+	}
+
+	ran := len(sf.DiscoveryAttempts) > 0
+	if !ran {
+		return "This ledger enumerates only the operations declared in the specification " +
+			"AppSec Framework was given. Discovery of undocumented surface did not run, so " +
+			"routes that exist but are not documented were not found, are not counted here, " +
+			"and were not tested. Coverage is therefore relative to the specification, not to " +
+			"the application."
+	}
+
+	base := fmt.Sprintf(
+		"This ledger enumerates the operations the specification declared, plus %d path(s) the "+
+			"application itself revealed and %d operation(s) a framework adapter found that the "+
+			"specification omits. Discovered paths are counted as untested and were not tested: "+
+			"nothing states what they should do, and their HTTP methods are unknown. ",
+		len(sf.Discovered), len(sf.AdapterDiscovered))
+
+	if sf.DiscoveryIncomplete {
+		return base + "Discovery stopped at a budget, so even that count is a floor. Coverage " +
+			"remains relative to what was found rather than to the application, and no figure " +
+			"here represents how much of the application that is."
+	}
+	return base + "Coverage remains relative to what was found rather than to the application: " +
+		"these sources reveal some undocumented surface, never all of it, and this report " +
+		"offers no figure for how much was missed because there is none to offer."
+}
+
+// buildDiscovery renders the account of surface beyond the specification.
+func buildDiscovery(res engine.Result) DiscoveryAccount {
+	sf := res.Surface
+	d := DiscoveryAccount{
+		SpecificationOperations: len(sf.Operations) - len(sf.AdapterDiscovered),
+		AdapterOperations:       sf.AdapterDiscovered,
+		Incomplete:              sf.DiscoveryIncomplete,
+		Limitations:             sf.DiscoveryLimitations,
+		Requests:                sf.DiscoveryRequests,
+		Bytes:                   sf.DiscoveryBytes,
+	}
+	for _, c := range sf.Discovered {
+		d.PathCandidates = append(d.PathCandidates, PathCandidate{
+			Path:    c.Path,
+			Method:  c.Method,
+			Sources: buildSources(c.Sources),
+		})
+	}
+	for _, c := range sf.DiscoveryOffOrigin {
+		d.OffOriginReferences = append(d.OffOriginReferences, PathCandidate{
+			Reference: c.Reference,
+			Sources:   buildSources(c.Sources),
+		})
+	}
+	for _, c := range sf.DiscoveryCorroborated {
+		d.Corroborated = append(d.Corroborated, Corroboration{
+			OperationID: c.OperationID,
+			Path:        c.Path,
+			Sources:     buildSources(c.Sources),
+		})
+	}
+	for _, a := range sf.DiscoveryAttempts {
+		d.Sources = append(d.Sources, DiscoverySource{
+			Kind:      string(a.Source),
+			Consulted: a.Ran,
+			Found:     a.Found,
+			Truncated: a.Truncated,
+			Problem:   a.Problem,
+		})
+	}
+	d.Statement = discoveryStatement(d)
+	return d
+}
+
+// discoveryStatement says what the discovery numbers mean, and — the part that
+// matters — what they do not.
+func discoveryStatement(d DiscoveryAccount) string {
+	if len(d.Sources) == 0 && len(d.AdapterOperations) == 0 {
+		return "Discovery of undocumented surface did not run. The operations assessed are " +
+			"those the specification declared, so a route absent from it is absent from this " +
+			"report as well."
+	}
+	base := fmt.Sprintf(
+		"%d path(s) were found that no specification or adapter describes, and %d operation(s) "+
+			"reported by a framework adapter were absent from the specification. Discovered "+
+			"paths are recorded as untested: their HTTP methods and their intended access "+
+			"control are both unknown, and a path's name is not evidence about either. ",
+		len(d.PathCandidates), len(d.AdapterOperations))
+	if d.Incomplete {
+		return base + "Discovery stopped at a budget, so these counts are a floor. " +
+			"They are not a measure of how much of the application was found: there is no " +
+			"denominator for that, and this report does not invent one."
+	}
+	return base + "These counts are what these sources revealed. They are not a measure of how " +
+		"much of the application was found: an application's total surface is unknown, which " +
+		"is the reason this account exists, so no completeness figure is offered."
+}
+
+// buildSources renders provenance.
+func buildSources(in []model.Source) []Source {
+	out := make([]Source, 0, len(in))
+	for _, s := range in {
+		out = append(out, Source{
+			Kind:       string(s.Kind),
+			Ref:        s.Ref,
+			ObservedAt: s.ObservedAt,
+		})
+	}
+	return out
+}
+
 // nonNil ensures slices marshal as [] rather than null, so consumers need no
 // null handling.
 func nonNil(in []string) []string {
@@ -729,6 +909,33 @@ func Summary(doc Document) string {
 	// nothing. The count is deliberately not folded into the findings line:
 	// these are another tool's claims, and merging them would be exactly the
 	// promotion this project refuses to do.
+	// Discovered surface is stated in the terminal, not only in the JSON.
+	//
+	// An operator who sees "untested: 14" needs to know that thirteen of those
+	// are paths the application revealed and the specification never mentioned.
+	// Without this line the number simply grows, and a number that grows for
+	// unexplained reasons gets ignored.
+	if d := doc.Surface.Discovery; len(d.PathCandidates) > 0 || len(d.AdapterOperations) > 0 ||
+		len(d.OffOriginReferences) > 0 {
+		b.WriteString("\n")
+		b.WriteString("  declared operations:  " + strconv.Itoa(d.SpecificationOperations) + "\n")
+		if n := len(d.AdapterOperations); n > 0 {
+			b.WriteString("  adapter-only:         " + strconv.Itoa(n) + " (assessed: method and " +
+				"expectation both come from the adapter)\n")
+		}
+		if n := len(d.PathCandidates); n > 0 {
+			b.WriteString("  discovered paths:     " + strconv.Itoa(n) +
+				" (untested: no method, no stated expectation)\n")
+		}
+		if n := len(d.OffOriginReferences); n > 0 {
+			b.WriteString("  off-origin refs:      " + strconv.Itoa(n) + " (recorded, not contacted)\n")
+		}
+		if d.Incomplete {
+			b.WriteString("  discovery:            incomplete — a budget was reached, so these " +
+				"counts are a floor\n")
+		}
+	}
+
 	var ran []EngineRun
 	for _, r := range doc.Engines.Runs {
 		// An engine nobody enabled is not a result. Listing it would pad the

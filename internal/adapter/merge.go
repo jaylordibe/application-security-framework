@@ -60,14 +60,22 @@ type MergeResult struct {
 	// Merges records every reconciliation, in a stable order.
 	Merges []Merge
 	// UnmatchedOperations names operations an adapter reported that the
-	// specification does not contain.
-	//
-	// They are recorded and deliberately not added to the attack surface.
-	// Testing a route that no specification documents is discovery of
-	// undocumented surface, which is a separate milestone with its own safety
-	// questions; silently attacking one here would be that milestone arriving
-	// unannounced.
+	// specification does not contain, for reporting.
 	UnmatchedOperations []string
+	// DiscoveredOperations are those same operations, built into the model's
+	// own type and carrying whatever expectations the adapter established.
+	//
+	// They are surface beyond the specification with a method and, often, an
+	// oracle — which is what distinguishes them from a path found in a
+	// JavaScript bundle. The adapter read the application's routing table and
+	// knows that GET /hidden exists and requires authentication; nothing has to
+	// be invented to assess it.
+	//
+	// They are returned rather than merged in, because whether to assess them is
+	// the caller's decision and not this function's. MergeInto reconciles
+	// facts; adopting undocumented surface into an assessment is a product
+	// choice with its own configuration.
+	DiscoveredOperations []model.Operation
 	// Limitations carries each adapter's self-reported blind spots forward, so
 	// the absence of a fact is never read as the absence of a control.
 	Limitations []string
@@ -124,6 +132,11 @@ func MergeInto(ops []model.Operation, docs []Document, now func() model.Source) 
 
 	unmatched := map[string]struct{}{}
 	limits := map[string]struct{}{}
+	// Facts about operations the specification does not contain, grouped so that
+	// an operation an adapter described twice — once for authentication, once
+	// for authorization — becomes one operation carrying both.
+	discovered := map[string]*model.Operation{}
+	var discoveredOrder []string
 
 	for _, doc := range docs {
 		prov := doc.Adapter.ExtractionMethod.Provenance()
@@ -135,6 +148,21 @@ func MergeInto(ops []model.Operation, docs []Document, now func() model.Source) 
 			idx, known := index[opID]
 			if !known {
 				unmatched[fmt.Sprintf("%s (reported by adapter %s)", opID, doc.Adapter.Name)] = struct{}{}
+				op, first := discovered[opID]
+				if !first {
+					op = &model.Operation{
+						ID:           opID,
+						Method:       strings.ToUpper(f.Operation.Method),
+						PathTemplate: f.Operation.Path,
+					}
+					discovered[opID] = op
+					discoveredOrder = append(discoveredOrder, opID)
+				}
+				if f.Value != ValueUnknown && f.Kind == KindAuthentication {
+					applyAuthentication(op, f, doc, now)
+				} else {
+					recordSource(op, f, doc, now)
+				}
 				continue
 			}
 			m := Merge{
@@ -200,6 +228,10 @@ func MergeInto(ops []model.Operation, docs []Document, now func() model.Source) 
 	for u := range unmatched {
 		out.UnmatchedOperations = append(out.UnmatchedOperations, u)
 	}
+	for _, id := range discoveredOrder {
+		out.DiscoveredOperations = append(out.DiscoveredOperations, *discovered[id])
+	}
+	model.SortOperations(out.DiscoveredOperations)
 	for l := range limits {
 		out.Limitations = append(out.Limitations, l)
 	}

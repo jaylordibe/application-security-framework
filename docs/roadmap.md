@@ -273,14 +273,75 @@ or referenced, no rule or template corpus is written, and nothing is installed.
 
 ---
 
-## Next — M5: Surface beyond the specification
+## Done — M5: Surface beyond the specification
 
-**Removes the limitation:** undocumented routes are invisible, so the ledger measures
+**Removes the limitation:** undocumented routes were invisible, so the ledger measured
 coverage of a surface handed to us by the thing being audited.
 
-Passive extraction from `Link` headers, `robots.txt` and JavaScript bundles; a
-conservative well-known-path probe on the target origin only. Every path found outside the
-specification becomes a ledger row: `untested (not in specification)`.
+| Task | Acceptance criteria | Delivered |
+|---|---|---|
+| Link headers | Parse RFC 8288 conservatively; same-origin only; record provenance. | ✅ A real single-pass parser, not a comma split: the grammar allows commas and semicolons inside quoted parameter values, and splitting loses links. Costs no additional request — the header arrives on the root response. |
+| robots.txt | Fetch from the target origin only; parse path directives; treat them as hints. | ✅ `Allow` and `Disallow` both yield paths; wildcards are truncated to their literal prefix; `Sitemap` is deliberately ignored, because following one is crawling. |
+| JavaScript bundles | Extract route candidates without executing anything or analysing semantics. | ✅ A linear literal scanner with no regular expression. Only same-origin scripts the root document names — no dependency graph, no source maps, no script found inside a script. |
+| Well-known probes | A deliberately small, documented list; target origin only. | ✅ Five paths, each admitted only because a published standard says the document *enumerates other paths*. Every rejection is written down too. |
+| Ledger | Every path outside the specification becomes `untested (not in specification)`. | ✅ Dimension `path`, cause `not_in_specification`, counted in the headline untested figure. |
+
+### What was refined before implementation
+
+**`sitemap.xml` was considered and rejected.** It is the closest thing to a crawler input
+in the candidate set: a list of pages to crawl, whose contents are site pages rather than
+API surface. Reading one is the first step of being a spider, and the thesis says not to
+build one.
+
+**The well-known list is five paths, not a wordlist.** Each had to answer one question:
+does a published standard say this document enumerates other paths? OIDC Discovery, RFC
+8414, RFC 9728, Apple universal links and Android App Links all do. `/.well-known/security.txt`
+names a contact rather than a path and was rejected; so was `/.well-known/change-password`;
+so was every guess at `/admin`, `/debug` or `/backup.zip`, because probing a list of guesses
+is directory brute forcing whatever it is called.
+
+**The OpenAPI well-known paths are not re-probed.** The specification loader already probes
+them when the operator permits it. Doing it again here would duplicate requests and, worse,
+would mean discovery quietly assessing a second specification the operator never supplied.
+
+**One redirect hop is taken deliberately.** The HTTP client still never follows a redirect.
+But a great many applications answer `/` with a 302 to `/login`, and refusing to look would
+mean reading no markup at all on a large class of real targets. The hop is re-checked
+against the target's origin, counts against the request budget, and drops the query string
+before re-requesting. An off-origin `Location` ends the walk.
+
+**Adapter-reported routes absent from the specification are now assessed.** M3 recorded
+them and said in as many words that testing them belonged to a later milestone with its own
+safety questions. This is that milestone and the questions have answers: the method comes
+from the application's routing table, the expectation from the same adapter, and scope is
+unchanged. Nothing is invented, so this is the one narrow case where discovered surface is
+testable — behind `discovery.surface.assessAdapterDiscovered`.
+
+### The boundary this milestone was most likely to cross
+
+Discovery is where this project would have become a crawler, and the check is mechanical
+rather than rhetorical: there is exactly one function in the package that makes a request,
+and it has four call sites — the root (plus at most one same-origin redirect hop),
+`/robots.txt`, the same-origin scripts the root names, and five fixed well-known paths.
+**Nothing discovered is ever fetched.** No anchors, no forms, no iframes, no sitemap, no
+recursion, no queue, no depth parameter, and no wordlist. The configuration cannot express
+crawling because there is nothing to configure.
+
+That also makes server-side request forgery a non-question rather than a control to audit:
+the set of URLs discovery will request is fixed before any target output is read.
+
+### What it does not do
+
+Discovery finds some undocumented surface, never all of it. There is no denominator for
+"how much of the application was found", so no report offers one — inventing a completeness
+percentage would be this project's own thesis failing about its own coverage. A discovered
+path gets no HTTP method and no security expectation: `/admin` is a string, and
+`Disallow: /admin` is a request to search engines.
+
+See [docs/evaluation/discovery-on-reference-applications.md](evaluation/discovery-on-reference-applications.md),
+where the honest result on both reference applications is that the four runtime sources
+find nothing additional — one ships an empty `Disallow:`, neither serves same-origin
+JavaScript, and neither could be started without installing dependencies.
 
 ---
 

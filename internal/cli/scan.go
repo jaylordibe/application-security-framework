@@ -19,6 +19,7 @@ import (
 	"github.com/jaylordibe/application-security-framework/internal/adapter"
 	"github.com/jaylordibe/application-security-framework/internal/check"
 	"github.com/jaylordibe/application-security-framework/internal/config"
+	"github.com/jaylordibe/application-security-framework/internal/discovery"
 	"github.com/jaylordibe/application-security-framework/internal/engine"
 	"github.com/jaylordibe/application-security-framework/internal/httpx"
 	"github.com/jaylordibe/application-security-framework/internal/identity"
@@ -222,10 +223,59 @@ func runScan(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) e
 		surface.AdapterLimitations = append(merged.Limitations, collected.Limitations...)
 		surface.AdapterMerges = merged.Merges
 		surface.AdapterUnmatched = merged.UnmatchedOperations
+
+		// Operations an adapter found that the specification does not document
+		// are surface beyond the specification with a method and an oracle:
+		// the adapter read the routing table, so nothing has to be invented to
+		// assess them. This is the one narrow case where discovered surface is
+		// genuinely testable, and it is still a switch, because it means
+		// requesting routes the operator may not have known were there.
+		if len(merged.DiscoveredOperations) > 0 && cfg.AssessAdapterDiscovered() {
+			surface.Operations = append(surface.Operations, merged.DiscoveredOperations...)
+			model.SortOperations(surface.Operations)
+			for _, op := range merged.DiscoveredOperations {
+				surface.AdapterDiscovered = append(surface.AdapterDiscovered, op.ID)
+			}
+			fmt.Fprintf(stderr, "appsec: %d operation(s) reported by an adapter are absent from "+
+				"the specification and were added to the assessed surface\n",
+				len(merged.DiscoveredOperations))
+		}
+
 		// Re-grade the oracle: adapter facts may have given operations an
 		// expectation the specification did not carry, and the grade must
 		// reflect the surface actually being assessed.
 		surface.Fidelity = openapi.Grade(surface.Operations)
+	}
+
+	// Discovery of surface the specification does not describe. It runs after
+	// adapters so that a path an adapter already accounted for corroborates
+	// that operation rather than appearing as a separate undocumented route.
+	if sources := cfg.DiscoverySources(); sources.Any() {
+		found := discovery.Run(ctx, discovery.Options{
+			Target: cfg.Target.BaseURL,
+			Client: client,
+			Limits: cfg.DiscoveryLimits(),
+			Enable: sources,
+			Now:    now,
+		})
+		m := discovery.Merge(surface.Operations, found.Candidates)
+		surface.Discovered = m.Undocumented
+		surface.DiscoveryCorroborated = m.Corroborated
+		surface.DiscoveryOffOrigin = m.OffOrigin
+		surface.DiscoveryAttempts = found.Attempts
+		surface.DiscoveryIncomplete = found.Incomplete
+		surface.DiscoveryLimitations = found.Limitations
+		surface.DiscoveryRequests = found.Requests
+		surface.DiscoveryBytes = found.Bytes
+
+		if n := len(m.Undocumented); n > 0 {
+			fmt.Fprintf(stderr, "appsec: discovery found %d path(s) no specification or adapter "+
+				"describes; each is recorded as untested\n", n)
+		}
+		if found.Incomplete {
+			fmt.Fprintln(stderr, "appsec: discovery stopped at a budget, so the discovered "+
+				"surface below is a floor rather than a total")
+		}
 	}
 
 	// The run directory is created before the assessment starts, so evidence can

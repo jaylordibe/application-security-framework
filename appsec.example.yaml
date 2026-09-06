@@ -198,6 +198,43 @@ discovery:
   openAPIURL: ""
   probeWellKnownPaths: true
 
+  # Surface the specification does not describe.
+  #
+  # AppSec Framework reads four things the application publishes about itself:
+  # the Link headers on its own root response, robots.txt, the JavaScript that
+  # root document references, and five standardized metadata documents. Anything
+  # they reveal that no specification or adapter describes becomes one ledger
+  # row: untested, with the reason "not in specification".
+  #
+  # It is not a crawler. It reads one page and the scripts that page names — no
+  # anchors, no forms, no sitemap, no recursion, no wordlist — and it never
+  # fetches anything it discovered. There is no depth setting here because there
+  # is no traversal to bound.
+  #
+  # A discovered path gets no HTTP method and no security expectation. "/admin"
+  # is a string, and "Disallow: /admin" is a request to search engines.
+  surface:
+    enabled: true
+    # linkHeaders: true
+    # robots: true
+    # javascript: true
+    # wellKnown: true
+
+    # Budgets. A complete pass should cost the target about what loading its own
+    # home page costs. Reaching one marks discovery incomplete rather than
+    # silently truncating.
+    # maxRequests: 20
+    # maxScripts: 5
+    # maxBytes: 8388608
+    # maxCandidates: 500
+
+    # Assess operations a framework adapter found that the specification omits.
+    # This is the one case where discovered surface is testable without
+    # inventing anything: the adapter read the routing table, so the method is
+    # known and the expectation comes from the same source that would have
+    # supplied it had the route been documented.
+    # assessAdapterDiscovered: true
+
 outcome:
   # Real applications rarely follow textbook status codes. If yours publishes a
   # stable machine-readable error code, point AppSec Framework at it: it is

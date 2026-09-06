@@ -531,6 +531,61 @@
         },
         "probeWellKnownPaths": {
           "type": "boolean"
+        },
+        "surface": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Discovery of paths the specification does not describe: Link headers on the target's own responses, robots.txt, path literals in the JavaScript the target's root document references, and a small set of standardized metadata documents. There is deliberately no depth, seed list, wordlist or include pattern here, because this makes a single non-recursive pass over artefacts the application publishes about itself rather than crawling it. A discovered path is recorded as untested with an explicit reason: its HTTP method is unknown, nothing states what it should return to whom, and its name is not evidence about either.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Defaults to true. Turning it off leaves the coverage ledger measuring only the surface the application chose to document."
+            },
+            "linkHeaders": {
+              "type": "boolean",
+              "description": "Read RFC 8288 Link headers on the target's root response. Costs no additional request."
+            },
+            "robots": {
+              "type": "boolean",
+              "description": "Read robots.txt for path candidates. It is crawler guidance, never an access-control policy: a Disallow directive names a path and says nothing about who may reach it."
+            },
+            "javascript": {
+              "type": "boolean",
+              "description": "Extract path literals from same-origin scripts the target's root document references. No JavaScript is executed, no script found inside another script is fetched, and scripts on other origins are recorded rather than downloaded."
+            },
+            "wellKnown": {
+              "type": "boolean",
+              "description": "Probe a small set of standardized metadata documents that, by their own specifications, enumerate other endpoints. It is not a wordlist and never will be: an entry qualifies only if a published standard says the document lists paths."
+            },
+            "maxRequests": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "description": "Total HTTP requests discovery may make. Default 20."
+            },
+            "maxScripts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "description": "How many same-origin scripts are fetched. Default 5. To read none, set javascript: false — a budget of zero would leave the source reporting that it ran."
+            },
+            "maxBytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 268435456,
+              "description": "Total response bytes discovery downloads. Default 8 MiB."
+            },
+            "maxCandidates": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "description": "Retained path candidates. Default 500. Reaching it marks discovery incomplete rather than silently truncating."
+            },
+            "assessAdapterDiscovered": {
+              "type": "boolean",
+              "description": "Defaults to true. Assess operations a framework adapter found that the specification omits. This is the one case where discovered surface is testable without inventing anything: the adapter read the routing table, so the HTTP method is known and the authentication expectation comes from the same source that would have supplied it had the route been documented."
+            }
+          }
         }
       },
       "not": {

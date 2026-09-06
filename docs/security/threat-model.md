@@ -854,6 +854,128 @@ threshold. Agreement between two engines is not verification. **TESTED**
   memory-safety bug inside the engine, which is outside anything this boundary
   can reach.
 
+### T-20 Discovery of undocumented surface
+
+M5 reads four artefacts the target publishes about itself — the `Link` headers on
+its own root response, `robots.txt`, the JavaScript its root document references,
+and five standardized metadata documents. Every one of them is written by the
+application being audited, which is to say by whoever controls it.
+
+**Nothing discovered is ever fetched.** This is the strongest statement in the
+whole feature and the one worth reading twice. Discovery makes requests to
+exactly four things: the target's root (plus at most one same-origin redirect
+hop), `/robots.txt`, the same-origin scripts the root document names, and a fixed
+list of five well-known paths. A path or URL that discovery *finds* is recorded
+and never requested. So the usual server-side request forgery question — "can a
+target make the scanner fetch something?" — has no surface to attack: the set of
+URLs discovery will request is fixed before any target output is read. **TESTED**
+(`discovery.TestOffOriginReferencesAreRecordedAndNeverFetched`, which widens the
+scope policy to include the second server deliberately, so that discovery's own
+origin rule is what is being tested rather than the allowlist).
+
+**Origin, not scope, bounds discovery.** Scope may authorize several hosts,
+because an operator can grant that deliberately. A link on the target is not such
+a grant. Discovery therefore compares against the target's own origin using the
+same normalization the allowlist uses (`scope.Origin`), so a trailing dot, an
+explicit default port, an IPv4-in-IPv6 literal, a Unicode homograph or embedded
+credentials cannot make another host look like this one. A second, weaker origin
+parser inside discovery is exactly how this would have been bypassed, so there
+is not one. **TESTED** (`scope.TestOriginEquality`,
+`scope.TestOriginEscapeAttemptsAllFail` — userinfo before the real authority, the
+target inside a fragment, the target as a name prefix, IPv4-mapped IPv6,
+hexadecimal and integer address forms, a neighbouring port and a backslash before
+the authority, all of which are either refused outright or resolve to a different
+origin — `scope.TestParseOriginRefusesEmbeddedCredentials`,
+`scope.TestOriginNormalizesIPv6`).
+
+**Redirects cannot widen anything.** The HTTP client still never follows a
+redirect. Discovery takes one hop deliberately, because a great many
+applications answer `/` with a 302 to `/login` and refusing to look would mean
+reading no markup at all on a large class of real targets. That hop is
+re-checked against the target's origin exactly as the first request was, counts
+against the request budget, and drops the query string before re-requesting so a
+redirect cannot carry a credential into a request AppSec made on its own
+initiative. An off-origin `Location` ends the walk and is recorded. **TESTED**
+(`discovery.TestRedirectsCannotWidenTheAssessment`, both directions).
+
+**Cloud metadata stays unreachable.** It is not on the target's origin, so
+discovery will not request it; and if scope somehow permitted the host, the
+resolved-address gate still denies the IMDS ranges. Two independent controls, and
+the discovery-layer one is tested with the metadata address planted in a `Link`
+header, a `<script src>` and a `fetch()` literal.
+
+**Parsers are the attack surface, and none of them uses a regular expression.**
+Every input here is a target-controlled string of arbitrary size, and the
+conventional URL-matching regex — alternation wrapped in unbounded repetition —
+is a catastrophic-backtracking denial of service handed to the party being
+audited. The `Link`, `robots.txt`, HTML and JavaScript readers are all
+single-pass, left-to-right scanners with at most one byte of lookahead. **TESTED**
+(`discovery.TestParseLinkHeaderSurvivesHostileInput`,
+`discovery.TestPathLiteralsCannotBeMadeToHang`,
+`discovery.TestScriptSourcesSurvivesBrokenMarkup`,
+`discovery.TestParseRobotsSurvivesHostileInput` — each feeds multi-megabyte
+hostile input under a wall-clock deadline, so a change that introduced
+backtracking would fail rather than merely slow down).
+
+**Memory and disk are bounded at four levels.** The HTTP client bounds one
+response; the per-source cap bounds what one artefact may contribute; the global
+candidate cap bounds the run; and request and byte budgets bound the pass. A
+target that emits a million distinct path literals produces a bounded, truncated
+result — and one that says it is truncated. **TESTED**
+(`discovery.TestBudgetExhaustionIsVisibleAndNeverLooksComplete`,
+`discovery.TestPathLiteralsBoundsCandidateExplosion`).
+
+**Truncation can never look like completion.** Incompleteness propagates from
+every level to the result, because a global budget, the shared candidate cap and
+one source hitting its own limit all mean the same thing to a reader: there was
+more to find. **TESTED**
+(`discovery.TestBudgetExhaustionIsVisibleAndNeverLooksComplete`).
+
+**Discovered URLs carry credentials, and none is retained.** A password-reset
+link, a signed download URL and a session identifier in a query string are all
+things an application puts in its own HTML and JavaScript. Candidates keep the
+path and nothing else: the query and fragment are dropped at normalization,
+before anything is stored, rather than filtered by a list of parameter names
+somebody thought of. Dropping the class beats redacting the members of it.
+**TESTED** (`discovery.TestCredentialBearingURLsLoseTheirCredentials`,
+`evals.TestDiscoveredSecretsNeverReachTheReport`).
+
+**Imported text cannot corrupt a terminal or a report.** Candidate paths are
+rejected outright if they contain control characters, whitespace, quotes or
+angle brackets — a path that was actually requested contains none of those, and a
+literal that does is prose or an injection attempt.
+
+**No security expectation is ever derived from a name.** This is the honesty
+control rather than the safety one, and it is the easiest thing in this milestone
+to get wrong. `/admin` in a bundle, and `Disallow: /admin` in `robots.txt`, are
+both strings. `robots.txt` is crawler guidance: it asks search engines not to
+index a path and says nothing whatsoever about who may reach it. A discovered
+path gets no method, no security requirement and no check — it becomes one
+untested ledger row whose detail states that nothing is known about it. **TESTED**
+(`discovery.TestPathNamesCreateNoSecurityExpectation`,
+`discovery.TestAPathStringNeverBecomesAnOperation`).
+
+**No method is invented.** A path candidate is a distinct model type precisely so
+that it cannot be forced into an Operation, because forcing it would require
+choosing a method, and an invented method produces an invented request and an
+invented conclusion. The one exception is a route a framework adapter reported:
+there the method comes from the application's routing table and the expectation
+from the same adapter that would have supplied it had the route been documented.
+
+**Third-party scripts are not executed, and not even fetched.** No JavaScript is
+executed anywhere in this milestone; no browser is started; a script referenced
+from another origin is recorded and left alone; a `sourceMappingURL` is not
+followed; and a script named inside another script is not a script this reads.
+**TESTED** (`discovery.TestDiscoveryDoesNotCrawl`, which serves a page whose every
+link leads onward and asserts that none of it is requested).
+
+**Discovery adds load to the target, and the budget is what bounds it.** A
+complete pass is sized to cost roughly what loading the target's own home page
+costs: by default at most twenty requests and eight megabytes, through the same
+rate limiter as the rest of the assessment. It is not a scan and cannot be turned
+into one by configuration, because there is no depth, seed list or wordlist to
+configure.
+
 ## 3. Residual risk accepted at this stage
 
 Stated plainly rather than left for a reader to discover.
@@ -871,8 +993,20 @@ Stated plainly rather than left for a reader to discover.
 - **A WAF or intermediary in front of the target can produce false negatives.** AppSec
   Framework fingerprints edge headers and annotates a denial with the possibility that an
   intermediary, not the application, refused the request — but it cannot yet prove which.
-- **The attack surface is specification-derived**, so an undocumented route is invisible.
-  This is disclosed in every report rather than mitigated.
+- **Discovery finds some undocumented surface, never all of it.** Four passive sources and
+  five well-known probes reveal what an application happens to publish about itself. A
+  route referenced from no page, no bundle, no header and no metadata document remains
+  invisible, and there is no denominator that would say how many those are — which is why
+  no report offers a completeness figure. What changed in M5 is that the routes which
+  *are* discoverable are now counted and named as untested rather than absent.
+- **A discovered path is almost never testable.** Its HTTP method is unknown and nothing
+  states what it should return to whom, so it can be accounted for and not assessed. Only
+  routes a framework adapter reports arrive with both, and only those are assessed.
+- **JavaScript extraction is lexical and therefore both incomplete and imprecise.** A
+  route assembled at runtime from fragments is not found; a string that looks like a path
+  and is not one may be reported. The design accepts noise over invention: every candidate
+  is explicitly untested, so a false one costs a line in the ledger rather than a false
+  finding.
 - **AppSec Framework is fingerprintable, and therefore cloakable.** Its `User-Agent`, its
   `__appsec_cb` cache-buster and its `appsec-nonexistent-*` baseline paths are all
   identifiable, so a hostile target can serve a denial to the scanner and real data to

@@ -362,13 +362,20 @@ Being specific about this is part of the product.
   recognise. They say so, per fact and per run. Framework-native introspection is designed
   and gated but not shipped
   ([ADR-0014](docs/adr/0014-adapter-contract-and-extraction-trust.md)).
-- **No undocumented-route discovery.** The attack surface comes from the specification, so
-  routes absent from it are invisible — not merely untested. Every report says this.
+- **Discovery finds some undocumented surface, never all of it.** `Link` headers,
+  `robots.txt`, the JavaScript the target's own root document references and five
+  standardized metadata documents reveal what an application happens to publish about
+  itself. A route referenced from none of those is still invisible, and no report offers a
+  completeness figure, because there is no denominator for one. What a discovered path
+  gets is an untested ledger row and a reason — never a method, and never a security
+  expectation inferred from its name.
 - **Only bearer and header API-key authentication.** No OAuth2 flows, no OIDC, no browser
   login, no cookie-session establishment, no refresh rotation. Query-string API keys are
   refused deliberately: a credential in a URL reaches error text, reproduction strings and
   every intermediary's access log.
-- **No AI**, no dashboard, no database, no crawler, no injection payloads.
+- **No AI**, no dashboard, no database, no crawler, no injection payloads. Discovery reads
+  one page and the scripts it names: no anchors, no forms, no sitemap, no recursion, and
+  no wordlist. Nothing it discovers is ever fetched.
 - **No measured precision or recall.** The evaluation harness proves the check
   distinguishes paired vulnerable and secure fixtures; it does not establish a
   false-positive rate on real applications.
@@ -421,6 +428,7 @@ authentication bypass — a silent pass is the worst possible default for a secu
 | [External engines](docs/engines/README.md) | installing, configuring and what each one covers |
 | [Adapters on real applications](docs/evaluation/adapters-on-reference-applications.md) | what they extract, and what they cannot |
 | [Engines on real applications](docs/evaluation/engines-on-reference-applications.md) | what M4 ran, what it could not, and why M4 is partial |
+| [Discovery on real applications](docs/evaluation/discovery-on-reference-applications.md) | what M5 finds on the reference apps, and why that is mostly nothing |
 | [ADRs](docs/adr/) | consequential decisions and their alternatives |
 | [Roadmap](docs/roadmap.md) | what is next, and what is explicitly out |
 

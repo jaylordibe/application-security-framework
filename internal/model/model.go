@@ -53,6 +53,16 @@ const (
 	SourceConfig      SourceKind = "config"
 	SourceRuntime     SourceKind = "runtime"
 	SourceAdapter     SourceKind = "adapter"
+
+	// The discovery sources. Each names an artefact the application itself
+	// served, so that a path found outside the specification can always answer
+	// "where did this come from?" — which is the difference between an
+	// accounted-for gap and a guess.
+	SourceLinkHeader SourceKind = "link-header"
+	SourceRobotsTxt  SourceKind = "robots-txt"
+	SourceHTML       SourceKind = "html"
+	SourceJavaScript SourceKind = "javascript"
+	SourceWellKnown  SourceKind = "well-known"
 )
 
 // Source records where a single fact came from, so a report can explain why
@@ -249,6 +259,64 @@ func (o Operation) RequiredPathParams() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// PathCandidate is a path the application revealed that no specification or
+// adapter describes.
+//
+// It is deliberately not an Operation, and that distinction is the whole point.
+// An Operation is a callable unit with a method: something that can be
+// requested, and therefore something a check can be planned against. A
+// PathCandidate is a string the application emitted. Finding "/api/admin/users"
+// in a JavaScript bundle establishes that the literal exists in code the target
+// served — not that the route exists, not that it answers GET, not that it
+// requires authentication, and not that its name means anything at all.
+//
+// Forcing one into the Operation model would require inventing an HTTP method,
+// and an invented method produces an invented request, an invented response and
+// an invented conclusion. So the model gains a smaller type instead: a path,
+// optionally a method when a source genuinely knew one, and the provenance that
+// says who said so.
+type PathCandidate struct {
+	// Path is the normalized path. It never carries a query string, a fragment
+	// or an authority: a discovered URL may embed a session token or a signed
+	// parameter, and structural information is all this type is for.
+	Path string
+	// Method is the HTTP method, when a source established one. Empty means
+	// unknown, and unknown is never filled in with a guess.
+	Method string
+	// Sources are every artefact that revealed this path, in a stable order.
+	// The same path found by three sources is one candidate with three sources,
+	// never three candidates.
+	Sources []Source
+	// OffOrigin marks a reference to somewhere outside the target's own origin.
+	// It is recorded because "the application talks to this" is useful context,
+	// and it is never fetched.
+	OffOrigin bool
+	// Reference is the off-origin URL, with its query removed. Empty for
+	// same-origin candidates, whose Path already says everything retained.
+	Reference string
+}
+
+// ID renders a stable identifier for a candidate.
+//
+// A path whose method is unknown is identified as a path, so that it can never
+// be mistaken for, or collide with, an operation identifier.
+func (c PathCandidate) ID() string {
+	if c.Method == "" {
+		return "path " + c.Path
+	}
+	return OperationID(c.Method, c.Path)
+}
+
+// SortPathCandidates orders candidates deterministically.
+func SortPathCandidates(cs []PathCandidate) {
+	sort.Slice(cs, func(i, j int) bool {
+		if cs[i].Path != cs[j].Path {
+			return cs[i].Path < cs[j].Path
+		}
+		return cs[i].Method < cs[j].Method
+	})
 }
 
 // Identity is an actor AppSec Framework may act as. Identities are never invented; they
@@ -508,6 +576,14 @@ const (
 	// budget. It is distinct from a crash: the tool was working, and what it
 	// produced is incomplete rather than wrong.
 	CauseBudgetExceeded BlockedCause = "budget_exceeded"
+	// CauseNotInSpecification means a path exists that no specification or
+	// adapter describes, so nothing states what it should do.
+	//
+	// It is the honest end state for discovered surface. A path found in a
+	// JavaScript bundle is not known to be vulnerable, protected, public or
+	// even callable: knowing it exists improves the account of what was not
+	// assessed, and creates no expectation whatsoever.
+	CauseNotInSpecification BlockedCause = "not_in_specification"
 )
 
 // Valid reports whether c is a known blocked cause.
@@ -517,7 +593,8 @@ func (c BlockedCause) Valid() bool {
 		CauseEngineUnavailable, CauseUnsupportedProtocol, CauseEnvironmentMismatch,
 		CauseInsufficientPrivilege, CauseSafetyPolicy, CauseIndeterminateOutcome,
 		CauseTransportError, CauseOutOfScope, CauseNoOracle, CauseRateLimited,
-		CauseAmbiguousDenial, CauseCancelled, CauseBudgetExceeded:
+		CauseAmbiguousDenial, CauseCancelled, CauseBudgetExceeded,
+		CauseNotInSpecification:
 		return true
 	}
 	return false

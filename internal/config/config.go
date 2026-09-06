@@ -25,6 +25,7 @@ import (
 	"github.com/goccy/go-yaml"
 
 	"github.com/jaylordibe/application-security-framework/internal/adapter"
+	"github.com/jaylordibe/application-security-framework/internal/discovery"
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/resource"
@@ -329,6 +330,49 @@ type Discovery struct {
 	// ProbeWellKnownPaths permits fetching the usual specification locations on
 	// the target's own origin when neither of the above is set.
 	ProbeWellKnownPaths *bool `yaml:"probeWellKnownPaths"`
+	// Surface configures discovery of paths the specification does not
+	// describe.
+	Surface SurfaceDiscovery `yaml:"surface"`
+}
+
+// SurfaceDiscovery configures the discovery of undocumented surface.
+//
+// There is deliberately no depth, no seed list, no wordlist and no include
+// pattern here. Each of those is a knob a crawler needs and this is not one: it
+// makes a single non-recursive pass over artefacts the application publishes
+// about itself. A configuration that could express "crawl three levels deep"
+// would mean the code behind it could too.
+type SurfaceDiscovery struct {
+	// Enabled turns discovery on. It defaults to on, because the alternative is
+	// a coverage ledger that silently measures only the surface the application
+	// chose to document.
+	Enabled *bool `yaml:"enabled"`
+	// LinkHeaders, Robots, JavaScript and WellKnown enable individual sources.
+	// Each defaults to on when discovery is enabled; they exist so an operator
+	// whose target dislikes one of them can turn just that one off.
+	LinkHeaders *bool `yaml:"linkHeaders"`
+	Robots      *bool `yaml:"robots"`
+	JavaScript  *bool `yaml:"javascript"`
+	WellKnown   *bool `yaml:"wellKnown"`
+
+	// MaxRequests, MaxScripts, MaxBytes and MaxCandidates bound what a target
+	// can make discovery do. Zero means the built-in default.
+	MaxRequests   int   `yaml:"maxRequests"`
+	MaxScripts    int   `yaml:"maxScripts"`
+	MaxBytes      int64 `yaml:"maxBytes"`
+	MaxCandidates int   `yaml:"maxCandidates"`
+
+	// AssessAdapterDiscovered permits assessing operations a framework adapter
+	// found that the specification does not document.
+	//
+	// It is separate from the sources above and defaults to on, because it is
+	// the one case where discovered surface is genuinely testable: the adapter
+	// read the application's routing table, so the method is known and the
+	// authentication expectation comes from the same source that would have
+	// supplied it had the route been documented. Nothing is invented. It is
+	// still a switch, because it means requests to routes the operator may not
+	// have known were there.
+	AssessAdapterDiscovered *bool `yaml:"assessAdapterDiscovered"`
 }
 
 // Outcome supplies application-specific signals for classifying responses.
@@ -776,6 +820,61 @@ func (c Config) ShouldExcludeAuthEndpoints() bool {
 }
 
 // ShouldProbeWellKnownPaths reports the effective setting.
+// SurfaceDiscoveryEnabled reports whether undocumented-surface discovery runs.
+func (c Config) SurfaceDiscoveryEnabled() bool {
+	return boolOr(c.Discovery.Surface.Enabled, true)
+}
+
+// AssessAdapterDiscovered reports whether adapter-found operations that the
+// specification omits are assessed.
+func (c Config) AssessAdapterDiscovered() bool {
+	return boolOr(c.Discovery.Surface.AssessAdapterDiscovered, true)
+}
+
+// DiscoverySources maps the configuration onto the discovery package's source
+// selection.
+func (c Config) DiscoverySources() discovery.Sources {
+	if !c.SurfaceDiscoveryEnabled() {
+		return discovery.Sources{}
+	}
+	s := c.Discovery.Surface
+	return discovery.Sources{
+		LinkHeaders: boolOr(s.LinkHeaders, true),
+		Robots:      boolOr(s.Robots, true),
+		JavaScript:  boolOr(s.JavaScript, true),
+		WellKnown:   boolOr(s.WellKnown, true),
+	}
+}
+
+// DiscoveryLimits maps the configuration onto the discovery package's budgets.
+// Unset fields keep the built-in defaults rather than becoming zero, which would
+// disable discovery by accident.
+func (c Config) DiscoveryLimits() discovery.Limits {
+	s := c.Discovery.Surface
+	l := discovery.DefaultLimits()
+	if s.MaxRequests > 0 {
+		l.MaxRequests = s.MaxRequests
+	}
+	if s.MaxScripts > 0 {
+		l.MaxScripts = s.MaxScripts
+	}
+	if s.MaxBytes > 0 {
+		l.MaxBytes = s.MaxBytes
+	}
+	if s.MaxCandidates > 0 {
+		l.MaxCandidates = s.MaxCandidates
+	}
+	return l
+}
+
+// boolOr resolves an optional boolean against its default.
+func boolOr(v *bool, def bool) bool {
+	if v == nil {
+		return def
+	}
+	return *v
+}
+
 func (c Config) ShouldProbeWellKnownPaths() bool {
 	if c.Discovery.ProbeWellKnownPaths == nil {
 		return true
