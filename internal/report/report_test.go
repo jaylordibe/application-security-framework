@@ -387,3 +387,45 @@ func TestSummaryOmitsOwnershipWhenNoneWasPlanned(t *testing.T) {
 		t.Errorf("an ownership section appeared with no fixtures configured:\n%s", out)
 	}
 }
+
+// An imported alert is neither confirmed nor suspected, so the findings line
+// alone would tell an operator whose engine reported a dozen criticals that
+// nothing was found. The summary must say what the engines did.
+func TestSummaryStatesWhatTheEnginesDid(t *testing.T) {
+	doc := Document{
+		Engines: EngineAccount{Runs: []EngineRun{
+			{Engine: "nuclei", Status: "completed", Version: "v3.11.1", Observations: 2},
+			{Engine: "zap", Status: "blocked", Cause: "engine_unavailable"},
+			{Engine: "sast", Status: "skipped"},
+		}},
+		Findings: []Finding{
+			{State: "observed"}, {State: "observed"},
+		},
+	}
+
+	got := Summary(doc)
+
+	if !strings.Contains(got, "engine nuclei: completed (v3.11.1), 2 observations") {
+		t.Errorf("the terminal summary does not report what Nuclei did:\n%s", got)
+	}
+	if !strings.Contains(got, "engine zap: blocked") {
+		t.Errorf("a failed engine is invisible in the terminal summary:\n%s", got)
+	}
+	if strings.Contains(got, "sast") {
+		t.Errorf("an engine nobody enabled was listed as a result:\n%s", got)
+	}
+	if !strings.Contains(got, "2 external results are recorded as observed") {
+		t.Errorf("imported results are not accounted for:\n%s", got)
+	}
+	// The whole point: they are reported without being promoted.
+	if !strings.Contains(got, "unverified by AppSec Framework") {
+		t.Errorf("the summary does not say these are unverified claims:\n%s", got)
+	}
+}
+
+// With no engines configured the block must not appear at all.
+func TestSummaryOmitsTheEngineBlockWhenNoneRan(t *testing.T) {
+	if got := Summary(Document{}); strings.Contains(got, "engine ") {
+		t.Errorf("an engine line appeared with no engines configured:\n%s", got)
+	}
+}

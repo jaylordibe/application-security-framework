@@ -267,10 +267,24 @@ func TestDoctorReportsMissingEnginesWithoutFailing(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("doctor exit = %d", code)
 	}
-	for _, want := range []string{"OWASP ZAP", "Nuclei", "Hadrian", "none are bundled"} {
+	for _, want := range []string{
+		"ZAP", "Nuclei", "Semgrep/opengrep", "Hadrian", "none are bundled",
+		// An absent engine must say what it would unlock and how to get it,
+		// because "not found" alone tells an operator nothing about what they
+		// are missing.
+		"not found", "Install Nuclei from",
+		// And doctor must state that it changes nothing: it is a diagnostic,
+		// and a security tool that installs software is a supply chain.
+		"never downloads or installs an engine",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor output missing %q", want)
 		}
+	}
+	// Absent engines must not fail the command, or `doctor` becomes unusable on
+	// exactly the machine where it is most needed.
+	if code != ExitOK {
+		t.Errorf("doctor exit = %d with no engines installed", code)
 	}
 }
 

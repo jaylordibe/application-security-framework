@@ -685,6 +685,175 @@ audited.
   the report's adapter section says so in words and why no extraction method
   maps to observed or verified provenance.
 
+### T-19 External scanning engines
+
+M4 runs three third-party programs — Nuclei, ZAP, Semgrep/opengrep — against a
+target somebody operates, from a machine holding this tool's credentials. Each is
+untrusted in three separate ways: the binary itself, the corpus it executes, and
+the output it produces.
+
+**The process is contained.** All three share the supervisor built for framework
+adapters, so there is one implementation of every guarantee rather than three.
+
+- Explicit argument vector, never a shell. A target URL containing `;`, `$()`,
+  a backtick or a newline is one argument and stays data. **TESTED**
+  (`scanner.TestHostileArgumentsStayData`, which asserts no shell interpretation
+  *and* that each hostile value arrived intact as a single argument).
+- **Its own process group**, so cancellation reaches descendants. This is the
+  concrete ZAP-and-Chromium case: an engine that starts a JVM or a browser must
+  not leave one running. **TESTED**
+  (`scanner.TestDescendantsAreKilledWithTheEngine`, which spawns a grandchild
+  that keeps touching a file and asserts it stops).
+- `WaitDelay`, so a child holding a pipe open cannot block the assessment
+  indefinitely. **TESTED** (`scanner.TestHungPipeDoesNotBlockForever`).
+- Both pipes drained concurrently and bounded. Draining one to completion first
+  deadlocks the moment the other fills, which a hostile engine can arrange.
+  **TESTED** (`scanner.TestEngineFailuresAreExplicit`).
+- A private temporary workspace per run, mode 0700, removed afterwards. ZAP is
+  additionally given a private home inside it, so a scan cannot accumulate state
+  in the operator's home directory or inherit it from a previous run. **TESTED**
+  (`scanner.TestWorkspaceIsRemoved`, `zap.TestInvocationIsolatesZAPState`).
+
+**The environment is built from nothing.** This is the sharpest risk in M4: an
+engine runs against the very target this tool authenticates to, so an inherited
+environment hands it the credentials.
+
+- Nothing is inherited — not `PATH`, not `HOME`. An engine declares the variables
+  it genuinely needs (`JAVA_HOME`, `PATH` and `TMPDIR` for ZAP's JVM launcher;
+  nothing at all for Nuclei) and gets those and no more.
+- This tool's identity credentials are refused **even when an operator names them
+  in `passEnv`**. **TESTED** (`scanner.TestEngineEnvironmentIsBuiltFromNothing`,
+  which asserts from the engine's own view of its environment).
+
+**Corpora are a supply chain.**
+
+- Nuclei templates are executable security logic. `-disable-unsigned-templates`
+  is passed explicitly, and `-code` — which enables code-protocol templates — is
+  never passed. **TESTED** (`nuclei.TestInvocationIsHardened`, which asserts both
+  the required flags and the forbidden ones).
+- That flag has a second edge, and it cuts the other way. Templates an operator
+  writes are unsigned, so a corpus of their own would be excluded in full: Nuclei
+  exits successfully having executed nothing, and the run reports a completed
+  scan with no findings. The corpus is therefore inspected before the process
+  starts — an empty one, or one in which nothing is signed, is refused with an
+  explanation — and `engines.nuclei.allowUnsignedTemplates` is the deliberate
+  opt-in. **TESTED**
+  (`nuclei.TestAnEntirelyUnsignedCorpusIsRefusedRatherThanSilentlySkipped`,
+  `nuclei.TestAnEmptyCorpusIsRefused`,
+  `nuclei.TestUnsignedTemplatesRunOnlyWhenExplicitlyTrusted`).
+- A waived signature check is never reported as an enforced one, and a corpus
+  that ran only in part is never reported as one that ran in full. **TESTED**
+  (`nuclei.TestTheSignatureClaimReflectsHowTheRunWasConfigured`,
+  `nuclei.TestAPartlySignedCorpusRecordsWhatWillNotRun`).
+- Neither Nuclei nor the static analyser is allowed to fetch its own corpus.
+  Nuclei refuses to run without a template directory; the static analyser refuses
+  a registry identifier such as `p/default` or `auto`. A corpus that changes
+  overnight makes two runs incomparable, and fetching one is an unannounced
+  network call that, for Semgrep, also enables telemetry. **TESTED**
+  (`nuclei.TestInvocationRefusesToRunWithoutAnExplicitCorpus`,
+  `sast.TestRegistryRuleSourcesAreRefused`).
+- Corpus provenance is recorded, pinned to a commit where the directory is a git
+  checkout and reported as unpinned where it is not. **TESTED**
+  (`nuclei.TestTemplateProvenanceRecordsAPinWhenThereIsOne`).
+- **No engine is ever installed.** No download, no package manager, no Docker
+  pull. `doctor` reports absence; a scan reports it as blocked.
+
+**Network behaviour is constrained where it can be, and disclosed where it
+cannot.**
+
+- Out-of-band interaction is disabled (`-no-interactsh`). Interactsh sends
+  target-triggered callbacks to a third-party service by default, which is both
+  unannounced egress and a disclosure of what is being tested.
+- Redirect following is off, so a target cannot redirect a scan off-origin.
+- Cloud upload, the PDCP dashboard and update checks are never enabled.
+- **The honest limit:** AppSec Framework cannot constrain what an individual
+  Nuclei template or ZAP rule does once the engine is running. A template in the
+  supplied corpus can address a host of its own choosing, and ZAP's spider
+  reaches what it can find. The mitigations above narrow this; they do not close
+  it, and the report says so on every run rather than implying containment that
+  does not exist.
+
+**An engine result is visible without being promoted.** An imported alert is
+`observed`, which is neither confirmed nor suspected — so the findings line alone
+would tell an operator whose engine reported a dozen criticals that nothing was
+found. The terminal states each engine's status and the observed count
+separately, rather than folding them into the findings total. **TESTED**
+(`report.TestSummaryStatesWhatTheEnginesDid`,
+`report.TestSummaryOmitsTheEngineBlockWhenNoneRan`,
+`scanner.TestImportedFindingsHaveDistinctStableIdentities`).
+
+**Output is attacker-influenced.** A scanner reports what a target sent back, and
+the target chooses that.
+
+- Every imported string is bounded and stripped of control characters before it
+  reaches a terminal, a report or SARIF. An ANSI escape can clear a screen or
+  rewrite a line, which is how a scan result lies about itself. **TESTED**
+  (`scanner.TestHostileEngineOutputIsSanitized`,
+  `TestOversizedImportedStringsAreBounded`).
+- Imported text passes through the run's redactor, which already knows this
+  assessment's credentials — so a bearer token reflected in a matched response
+  does not reach disk.
+- **Secret-bearing fields are not imported at all.** Nuclei's `request`,
+  `response`, `template-encoded` and `curl-command` are never decoded: the curl
+  command carries the `Authorization` header, and the request and response are
+  raw HTTP. Semgrep's matched source lines are likewise dropped, because secrets
+  live in source and a report that quotes it copies an application into an
+  artefact attached to tickets. **TESTED**
+  (`nuclei.TestNormalizePreservesProvenanceAndDropsSecretBearingFields`,
+  `sast.TestMatchedSourceIsNotImported`).
+- Recorded argument vectors are redacted before storage, so a credential in a
+  target URL does not become a copy-and-paste command in a report.
+
+**A failure never becomes a clean result.** This is the requirement M4 exists
+around, since the alternative is a crashed scanner silently contributing nothing
+to a report that then reads as green.
+
+- Missing binary, crash, non-zero exit with no results, timeout, cancellation,
+  output flood, malformed document and profile refusal all produce a blocked
+  ledger row whose text says what was lost. **TESTED**
+  (`scanner.TestMissingEngineIsBlockedNotClean`, `TestEngineFailuresAreExplicit`,
+  `evals.TestM4_EngineFailureDoesNotMakeTheReportCleaner`).
+- Truncated output is **refused rather than parsed**: a shorter document reports
+  fewer findings than the engine produced.
+- A partial run retains what it found, is marked partial, and **claims no
+  coverage at all**. **TESTED** (`scanner.TestPartialResultsClaimNoCoverage`).
+- A failed engine cannot remove a class from `classesNotAssessed`. **TESTED**
+  (`evals.TestM4_EngineFailureDoesNotMakeTheReportCleaner`).
+
+**An alert is not a finding.** Every external result enters as `observed` with
+AppSec severity `unassessed`, a value with no rank that cannot satisfy a policy
+threshold. Agreement between two engines is not verification. **TESTED**
+(`scanner.TestExternalAlertsAreOnlyEverObserved`,
+`evals.TestM4_AgreementBetweenEnginesIsNotConfirmation`,
+`evals.TestM4_ExternalObservationsCannotFailTheBuild`).
+
+**Residual risk, stated rather than mitigated.**
+
+- **Executable provenance cannot be established.** AppSec records the resolved
+  path and the tool's self-reported version and sets `Verified: false` on every
+  run. A binary named `nuclei` on `PATH` may be anything; an attacker who can
+  replace it already has the operator's machine. There is no signature check,
+  and claiming one would be worse than not having it.
+- **A compromised engine installation is fully trusted within its sandbox.** The
+  boundary bounds what it can consume, what environment it holds and how long it
+  lives. It does not sandbox syscalls or filesystem access: an engine reads and
+  writes as the invoking user.
+- **Engine and corpus drift.** Two runs against different installed versions or
+  different template checkouts are not comparable. Versions and corpus
+  provenance are recorded so the difference is visible, not prevented.
+- **ZAP runs unauthenticated**, so anything reachable only when signed in is
+  unscanned. This is a deliberate trade against handing credentials to a
+  third-party process, and it is reported as a limitation on every ZAP run.
+- **Static analysis is not runtime proof.** A matched sink is not a reachable or
+  exploitable one. The observation state and the report's wording carry this;
+  nothing in the pipeline converts it.
+- **Windows has no POSIX process groups**, so a grandchild spawned by an engine
+  may outlive a cancellation there. The engine itself is still killed.
+- **Target-triggered scanner bugs are the engine's own.** A malicious target may
+  crash or hang a scanner; that becomes a blocked row. It may also trigger a
+  memory-safety bug inside the engine, which is outside anything this boundary
+  can reach.
+
 ## 3. Residual risk accepted at this stage
 
 Stated plainly rather than left for a reader to discover.

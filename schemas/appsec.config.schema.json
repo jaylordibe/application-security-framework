@@ -373,6 +373,149 @@
         }
       }
     },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "External scanning engines. Each is a known integration, not a command you compose: there is deliberately no command, args or env field, because those would make AppSec Framework a general process runner and turn its argument-vector construction, minimal environment and profile gating into things a configuration file could opt out of. An engine's results are recorded as observed and are never promoted to confirmed on the engine's own confidence.",
+      "properties": {
+        "sourceRoot": {
+          "type": "string",
+          "description": "An application checkout, for engines that read code."
+        },
+        "nuclei": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Nuclei. Templates are executable security logic and must be supplied locally: AppSec Framework will not let Nuclei fetch its own, because a corpus that changed overnight makes results incomparable. Unsigned templates, code templates, headless browsing, redirect following, cloud upload and out-of-band interaction are all disabled.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Engines are off by default: none runs because it happens to be installed."
+            },
+            "executable": {
+              "type": "string",
+              "description": "Explicit path. Empty looks the engine's own binary name up on PATH."
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7200
+            },
+            "passEnv": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "description": "Variables to forward. The engine's environment is otherwise built from nothing, and this tool's identity credentials can never be forwarded."
+            },
+            "severity": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z]{1,16}$"
+              },
+              "description": "Optional severity filter, in the engine's own vocabulary."
+            },
+            "templates": {
+              "type": "string",
+              "description": "Local template directory. Required when nuclei is enabled. A git checkout is recorded by commit, which is what makes a run reproducible."
+            },
+            "allowUnsignedTemplates": {
+              "type": "boolean",
+              "description": "Execute templates that carry no Nuclei signature. Off by default. With it off, a corpus in which nothing is signed is refused rather than run, because Nuclei would exclude every template, exit successfully and produce a scan that reports no findings after checking nothing. Turning it on is a statement that you trust this directory: a template is executable security logic aimed at your own target, and the provenance of every resulting observation records that nothing else established it."
+            },
+            "rateLimit": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000
+            }
+          }
+        },
+        "zap": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "ZAP, run one-shot rather than as a daemon, with a private home inside the run's workspace. It runs unauthenticated: AppSec Framework does not hand identity credentials to a third-party engine.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Engines are off by default: none runs because it happens to be installed."
+            },
+            "executable": {
+              "type": "string",
+              "description": "Explicit path. Empty looks the engine's own binary name up on PATH."
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7200
+            },
+            "passEnv": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "description": "Variables to forward. The engine's environment is otherwise built from nothing, and this tool's identity credentials can never be forwarded."
+            },
+            "severity": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z]{1,16}$"
+              },
+              "description": "Optional severity filter, in the engine's own vocabulary."
+            },
+            "mode": {
+              "enum": [
+                "passive",
+                "active"
+              ],
+              "description": "Defaults to passive. \"active\" runs ZAP's active scanner, which sends attack payloads and therefore requires assessment.profile: intrusive. A passive run does not assess injection and does not claim to."
+            }
+          }
+        },
+        "sast": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Semgrep or opengrep. opengrep is preferred when both are installed: it is the fork without Semgrep's AUTO metrics default and without the registry rule licence. Rules must be local \u2014 a registry identifier would fetch over the network and, for Semgrep, enable telemetry. Source findings are observations, not evidence that anything is reachable at runtime.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Engines are off by default: none runs because it happens to be installed."
+            },
+            "executable": {
+              "type": "string",
+              "description": "Explicit path. Empty looks the engine's own binary name up on PATH."
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7200
+            },
+            "passEnv": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "description": "Variables to forward. The engine's environment is otherwise built from nothing, and this tool's identity credentials can never be forwarded."
+            },
+            "severity": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z]{1,16}$"
+              },
+              "description": "Optional severity filter, in the engine's own vocabulary."
+            },
+            "rules": {
+              "type": "string",
+              "description": "Local rule file or directory. Required when sast is enabled. AppSec Framework ships no rules."
+            }
+          }
+        }
+      }
+    },
     "discovery": {
       "type": "object",
       "additionalProperties": false,

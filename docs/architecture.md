@@ -80,6 +80,9 @@ implementation genuinely exists or is imminent.
 | `internal/identity` | principals, credential sources, authenticated controls, liveness | ✅ |
 | `internal/resource` | resource fixtures, ownership expectation, safe parameter binding | ✅ |
 | `internal/adapter` | adapter contract, hostile-output validation, execution boundary, provenance merging | ✅ |
+| `internal/proc` | one hardened subprocess supervisor, shared by adapters and engines | ✅ |
+| `internal/scanner` | external engine contract, supervision, normalization, failure accounting | ✅ |
+| `internal/scanner/*` | Nuclei, ZAP, Semgrep/opengrep integrations | ✅ static-tested (ADR-0015) |
 | `adapters/*` | out-of-process framework probes (Laravel, NestJS) | ✅ static tier (ADR-0014) |
 | `internal/openapi` | specification ingestion → operations + declared expectations | ✅ |
 | `internal/outcome` | response → access outcome classification | ✅ |
@@ -87,7 +90,6 @@ implementation genuinely exists or is imminent.
 | `internal/engine` | assessment lifecycle: plan, execute, record; owns the `Check` interface | ✅ |
 | `internal/store` | run persistence, evidence storage, permissions | ✅ |
 | `internal/report` | JSON and SARIF renderers; owns the versioned wire DTOs | ✅ |
-| `engines/*` | external scanner integrations | ⬜ designed (ADR-0005) |
 
 **Status is ⬜ until code for that package is merged with tests.** A project whose thesis
 is honest accounting of what it could not test must not overstate its own completeness.
@@ -469,7 +471,87 @@ were read.*
 
 ---
 
-## 11. Failure semantics
+## 11. External engines (M4)
+
+```
+Nuclei / ZAP / Semgrep
+        │  one supervisor: argv, minimal env, process group, budgets
+        ▼
+   structured output
+        │  bounded, sanitized, redacted
+        ▼
+    OBSERVATION  ──────────────▶  ledger row (executed / blocked / partial)
+        │
+        ▼
+   finding: state=observed, severity=unassessed
+        │
+        ▼
+   AppSec verification (if any exists for the class)
+        │
+        ▼
+   suspected / confirmed / rejected
+```
+
+The vertical line matters more than the boxes. An external alert enters at
+`observed` and only AppSec's own deterministic verification can move it. Where
+this project has no verification for a class — which is most of what these
+engines find — `observed` is the final state, and that is the honest answer
+rather than a gap.
+
+### An alert is not a finding
+
+`ToFinding` takes no state parameter. There is no argument any caller could pass
+that would produce `suspected` or `confirmed`, because there is no fact about an
+external alert that would justify one.
+
+AppSec's severity for an imported result is `unassessed`: a value with no rank,
+so it cannot satisfy a policy threshold and cannot fail a build. The engine's own
+severity and confidence sit beside it, verbatim. ZAP emits four risks and five
+confidences, Nuclei five severities and no confidence, Semgrep three levels —
+none maps onto another, and converting between them would invent precision
+(ADR-0005, ADR-0015).
+
+**Agreement between engines is not verification.** There is no rule anywhere that
+promotes a finding because two tools reported it.
+
+### Supervision
+
+Shared with the adapter boundary, so there is one implementation of each
+guarantee: explicit argument vector and never a shell; environment built from
+nothing, with this tool's identity credentials refused even when configured; the
+child in its own process group so cancellation reaches a JVM or a browser it
+started; `WaitDelay` against a held-open pipe; both pipes drained concurrently
+and bounded; a private workspace removed afterwards.
+
+### Coverage is earned, not assumed
+
+| Outcome | Ledger | Coverage claimed |
+|---|---|---|
+| completed | executed | the classes its normalizer reported |
+| partial | blocked `budget_exceeded` | **none** — results retained and marked |
+| blocked | blocked, with the cause | **none** |
+| not enabled | no row — see below | none |
+
+A class leaves `classesNotAssessed` only when an engine completed *and* reported
+it covered, which a partial run and a passive ZAP scan both decline to do. Even
+then it stays in the list, qualified with the engine, its version and its corpus:
+"assessed by Nuclei 3.11.1 against these templates" and "assessed" are different
+claims.
+
+An engine nobody enabled produces no ledger row, because the ledger accounts for
+work that was *planned*. It is not hidden — it appears in the engine account as
+skipped, and its classes stay in `classesNotAssessed`.
+
+### Not in M4
+
+No injection engine, no CVE matcher, no static-analysis engine, no payload
+library, no rule or template corpus, and no installer. If implementing something
+here would mean writing payload generation or taint analysis, it belongs to the
+engine, not to this project.
+
+---
+
+## 12. Failure semantics
 
 - An engine crash is an engine crash. It becomes a blocked coverage entry and a recorded
   tool failure — never an absence of findings.
@@ -479,7 +561,7 @@ were read.*
 
 ---
 
-## 12. What is intentionally missing
+## 13. What is intentionally missing
 
 Discovery beyond specification ingestion; any external engine integration; identity and
 authentication providers; the adversarial authorization engine; tenancy; workflows;

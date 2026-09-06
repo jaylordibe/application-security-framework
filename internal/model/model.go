@@ -277,6 +277,19 @@ const (
 	SeverityMedium   Severity = "medium"
 	SeverityHigh     Severity = "high"
 	SeverityCritical Severity = "critical"
+	// SeverityUnassessed means AppSec Framework has not judged how damaging
+	// this would be.
+	//
+	// It exists for findings imported from an external engine. Such a finding
+	// arrives with the engine's own severity, and rewriting that into this
+	// scale would be inventing an assessment nobody made: a scanner's "critical"
+	// is a statement about a template's category, not about this application's
+	// exposure. So the engine's value is preserved verbatim in ExternalSource
+	// and this field says, truthfully, that AppSec has not formed a view.
+	//
+	// It deliberately has no rank, so it can never satisfy a policy threshold.
+	// An unverified external alert must not fail somebody's build on its own.
+	SeverityUnassessed Severity = "unassessed"
 )
 
 // severityRank orders severities so a policy threshold can be compared.
@@ -311,7 +324,8 @@ func (s Severity) AtLeast(threshold Severity) bool {
 // Valid reports whether s is a known severity.
 func (s Severity) Valid() bool {
 	switch s {
-	case SeverityInfo, SeverityLow, SeverityMedium, SeverityHigh, SeverityCritical:
+	case SeverityInfo, SeverityLow, SeverityMedium, SeverityHigh, SeverityCritical,
+		SeverityUnassessed:
 		return true
 	}
 	return false
@@ -394,6 +408,13 @@ type Finding struct {
 	OWASP       []string
 	OperationID string
 	IdentityID  string
+	// External records the engine an imported observation came from, and that
+	// engine's own verdict, verbatim.
+	//
+	// It is a pointer so that a native finding carries nothing: the absence of
+	// this field is what distinguishes something AppSec established itself from
+	// something another tool reported.
+	External *ExternalSource
 	// ResourceID names the resource fixture a cross-owner finding is about, and
 	// OwnerIdentityID the identity that owns it. Both are empty for findings
 	// that are not about a specific resource.
@@ -406,6 +427,43 @@ type Finding struct {
 	Verification VerificationRecord
 	Remediation  string
 	Reproduction []string
+}
+
+// ExternalSource records where an imported observation came from.
+//
+// Everything here is the engine's own account of itself, kept verbatim. AppSec
+// Framework's severity and confidence live on the Finding and mean something
+// different: ZAP emits four risks and five confidences, Nuclei five severities
+// and no confidence at all, and Semgrep a three-value severity. None of those
+// scales maps onto another, and converting between them silently would be
+// inventing precision (ADR-0005).
+type ExternalSource struct {
+	// Engine is the tool's identifier, e.g. "nuclei".
+	Engine string
+	// EngineVersion is what the tool reported about itself.
+	EngineVersion string
+	// ExecutablePath is where the binary that ran actually lives, so a report
+	// says which program produced this rather than which name was on PATH.
+	ExecutablePath string
+	// RunID identifies the invocation within this assessment.
+	RunID string
+	// RuleID and RuleName identify the template, rule or plugin that fired.
+	RuleID   string
+	RuleName string
+	// Severity and Confidence are the engine's own values, unconverted. Empty
+	// when the engine does not express one.
+	Severity   string
+	Confidence string
+	// Location is where the engine says the issue is: a URL, or a file and
+	// line for a source scanner.
+	Location string
+	// Parameter names the input the engine implicated, when it says.
+	Parameter string
+	// References are the engine's classifications — CWE, CVE, WASC.
+	References []string
+	// RuleProvenance describes where the rule or template came from, so a
+	// result can be reproduced against the same corpus.
+	RuleProvenance string
 }
 
 // Disposition is what happened to one unit of intended work.
@@ -446,6 +504,10 @@ const (
 	CauseRateLimited           BlockedCause = "rate_limited"
 	CauseAmbiguousDenial       BlockedCause = "ambiguous_denial"
 	CauseCancelled             BlockedCause = "cancelled"
+	// CauseBudgetExceeded means work stopped because it hit a time or output
+	// budget. It is distinct from a crash: the tool was working, and what it
+	// produced is incomplete rather than wrong.
+	CauseBudgetExceeded BlockedCause = "budget_exceeded"
 )
 
 // Valid reports whether c is a known blocked cause.
@@ -455,7 +517,7 @@ func (c BlockedCause) Valid() bool {
 		CauseEngineUnavailable, CauseUnsupportedProtocol, CauseEnvironmentMismatch,
 		CauseInsufficientPrivilege, CauseSafetyPolicy, CauseIndeterminateOutcome,
 		CauseTransportError, CauseOutOfScope, CauseNoOracle, CauseRateLimited,
-		CauseAmbiguousDenial, CauseCancelled:
+		CauseAmbiguousDenial, CauseCancelled, CauseBudgetExceeded:
 		return true
 	}
 	return false

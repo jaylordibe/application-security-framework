@@ -5,14 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"sort"
-	"strings"
 	"time"
+
+	"github.com/jaylordibe/application-security-framework/internal/proc"
 )
 
 // Running an adapter means running a program the operator chose, against a
@@ -33,9 +30,6 @@ const (
 	// MaxStderrBytes bounds captured stderr. Diagnostics are useful and are not
 	// the payload, so this is much smaller.
 	MaxStderrBytes = 256 << 10
-	// killGrace is how long a cancelled adapter has to exit before its process
-	// group is killed.
-	killGrace = 5 * time.Second
 )
 
 // TrustMode says whether the operator has authorised running the target
@@ -154,79 +148,35 @@ func Run(ctx context.Context, spec Spec, opts Options) Outcome {
 	}
 	spec.SourceRoot = root
 
-	timeout := spec.Timeout
-	if timeout <= 0 {
-		timeout = DefaultTimeout
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	// Explicit argument vector, never a shell string. The adapter is told the
-	// root twice — as the working directory and as an argument — because an
-	// adapter that has to discover its own root is an adapter that can be
-	// pointed somewhere else.
-	args := append([]string{"--source-root", spec.SourceRoot}, spec.Args...)
-	cmd := exec.CommandContext(runCtx, spec.Path, args...)
-	cmd.Dir = spec.SourceRoot
-	cmd.Env = buildEnv(spec.PassEnv, opts.ForbiddenEnv)
-	cmd.Stdin = nil
-	// A cancelled adapter gets a grace period, then the process is killed rather
-	// than left holding the pipe open forever.
-	cmd.WaitDelay = killGrace
-	configureProcessGroup(cmd)
-
-	var stdout, stderr bytes.Buffer
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return finish(fmt.Errorf("cannot capture adapter output: %w", err))
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return finish(fmt.Errorf("cannot capture adapter diagnostics: %w", err))
-	}
-
-	if err := cmd.Start(); err != nil {
-		return finish(fmt.Errorf("adapter %s could not be started: %w", spec.Name, redactPath(err, spec.Path)))
-	}
-
-	// Both pipes are drained concurrently. Reading one to completion first
-	// deadlocks as soon as the other fills its buffer, which a hostile adapter
-	// can arrange deliberately.
-	var stdoutTruncated, stderrTruncated bool
-	done := make(chan struct{}, 2)
-	go func() {
-		stdoutTruncated = copyBounded(&stdout, stdoutPipe, MaxStdoutBytes)
-		done <- struct{}{}
-	}()
-	go func() {
-		stderrTruncated = copyBounded(&stderr, stderrPipe, MaxStderrBytes)
-		done <- struct{}{}
-	}()
-	<-done
-	<-done
-
-	waitErr := cmd.Wait()
-	out.Stderr = sanitize(stderr.String(), MaxStderrBytes)
-	if stderrTruncated {
-		out.Stderr += " […adapter diagnostics truncated]"
-	}
+	// Supervision is shared with the external-engine boundary (internal/proc).
+	// Two implementations of process-group cleanup and pipe draining would be
+	// two chances to get it wrong, and the failure mode is an orphaned process.
+	run, runErr := proc.Run(ctx, proc.Spec{
+		Name:      "adapter " + spec.Name,
+		Path:      spec.Path,
+		Args:      append([]string{"--source-root", spec.SourceRoot}, spec.Args...),
+		Dir:       spec.SourceRoot,
+		Env:       proc.MinimalEnv(spec.PassEnv, opts.ForbiddenEnv),
+		Timeout:   spec.Timeout,
+		MaxStdout: MaxStdoutBytes,
+		MaxStderr: MaxStderrBytes,
+	})
+	out.Stderr = run.Stderr
 
 	switch {
-	case runCtx.Err() != nil && errors.Is(runCtx.Err(), context.DeadlineExceeded):
-		return finish(fmt.Errorf("adapter %s exceeded its %s budget and was stopped", spec.Name, timeout))
-	case runCtx.Err() != nil:
-		return finish(fmt.Errorf("adapter %s was cancelled before it finished", spec.Name))
-	case stdoutTruncated:
+	case run.TimedOut, run.Cancelled:
+		return finish(runErr)
+	case run.StdoutTruncated:
 		// Truncated output is refused rather than parsed. A partial document is
 		// a smaller document, and a smaller document reports fewer controls.
 		return finish(fmt.Errorf("adapter %s produced more than %d bytes on stdout; the output was "+
 			"refused rather than truncated, because a partial document reports fewer controls than "+
 			"the adapter found", spec.Name, MaxStdoutBytes))
-	case waitErr != nil:
-		return finish(fmt.Errorf("adapter %s failed: %w", spec.Name, redactPath(waitErr, spec.Path)))
+	case runErr != nil:
+		return finish(fmt.Errorf("adapter %s failed: %w", spec.Name, runErr))
 	}
 
-	res, err := Parse(bytes.NewReader(stdout.Bytes()))
+	res, err := Parse(bytes.NewReader(run.Stdout))
 	if err != nil {
 		return finish(fmt.Errorf("adapter %s: %w", spec.Name, err))
 	}
@@ -270,75 +220,4 @@ func resolveSourceRoot(root string) (string, error) {
 		return "", fmt.Errorf("source root %q is not a directory", root)
 	}
 	return resolved, nil
-}
-
-// buildEnv constructs the adapter's environment from nothing.
-//
-// The parent environment is never inherited. A CI job's environment routinely
-// holds a GitHub token, cloud credentials, a registry password and — in this
-// tool's case — the very tokens it authenticates to the target with. Handing
-// that to a third-party binary invoked against an untrusted repository is the
-// single easiest way this feature could cause real harm.
-//
-// PATH is deliberately absent unless asked for. An adapter is executed by
-// explicit path and does not need to look anything up; one that shells out to a
-// helper can be given PATH explicitly by an operator who has decided to.
-func buildEnv(pass, forbidden []string) []string {
-	deny := make(map[string]bool, len(forbidden))
-	for _, f := range forbidden {
-		deny[f] = true
-	}
-	seen := map[string]bool{}
-	env := make([]string, 0, len(pass)+1)
-	for _, name := range pass {
-		if name == "" || deny[name] || seen[name] {
-			continue
-		}
-		seen[name] = true
-		if v, ok := os.LookupEnv(name); ok {
-			env = append(env, name+"="+v)
-		}
-	}
-	// A stable, minimal locale so an adapter's output does not vary with the
-	// machine it ran on.
-	if !seen["LC_ALL"] {
-		env = append(env, "LC_ALL=C")
-	}
-	sort.Strings(env)
-	return env
-}
-
-// copyBounded copies at most limit bytes and reports whether more remained.
-//
-// It reads limit+1 so that "exactly at the limit" is distinguishable from
-// "truncated", and it drains the rest so a writing child is not left blocked on
-// a full pipe when we are about to wait for it.
-func copyBounded(dst *bytes.Buffer, src io.Reader, limit int64) bool {
-	n, _ := io.Copy(dst, io.LimitReader(src, limit+1))
-	truncated := n > limit
-	if truncated {
-		dst.Truncate(int(limit))
-		_, _ = io.Copy(io.Discard, src)
-	}
-	return truncated
-}
-
-// redactPath keeps an adapter's filesystem path out of an error that will be
-// stored and displayed.
-func redactPath(err error, path string) error {
-	if err == nil || path == "" {
-		return err
-	}
-	msg := strings.ReplaceAll(err.Error(), path, filepath.Base(path))
-	return errors.New(sanitize(msg, 512))
-}
-
-// configureProcessGroup puts the adapter in its own process group where the
-// platform supports it, so cancelling the run kills anything it spawned rather
-// than orphaning it.
-func configureProcessGroup(cmd *exec.Cmd) {
-	if runtime.GOOS == "windows" {
-		return
-	}
-	setProcessGroup(cmd)
 }

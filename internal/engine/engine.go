@@ -19,6 +19,7 @@ import (
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/openapi"
 	"github.com/jaylordibe/application-security-framework/internal/resource"
+	"github.com/jaylordibe/application-security-framework/internal/scanner"
 )
 
 // Check is the contract the engine consumes.
@@ -99,6 +100,9 @@ type Options struct {
 	Resources []resource.Fixture
 	// ResourceCheck runs cross-owner work. Nil disables it.
 	ResourceCheck ResourceCheck
+	// Engines is what the external scanning engines contributed, including what
+	// they failed to do.
+	Engines scanner.Collection
 	// Now supplies the clock, injected so runs are reproducible.
 	Now func() time.Time
 	// EvidenceSink persists a captured exchange and returns a reference to it.
@@ -138,6 +142,8 @@ type Result struct {
 	// Ownership accounts for the cross-owner boundaries this run exercised, and
 	// states plainly what they do not cover.
 	Ownership OwnershipSummary
+	// Engines is the external engine account.
+	Engines scanner.Collection
 }
 
 // DimensionOperation is the ledger dimension for assessment work against one
@@ -175,7 +181,13 @@ func (r Result) BlockedCount() int {
 // IsAssessmentWork reports whether a ledger dimension represents work that tests
 // the target, as opposed to a precondition for testing it.
 func IsAssessmentWork(dimension string) bool {
-	return dimension == DimensionOperation || dimension == DimensionOwnership
+	return dimension == DimensionOperation ||
+		dimension == DimensionOwnership ||
+		// An external engine run is assessment: it was planned work against the
+		// target. Leaving it out produced a summary reading "blocked: 0" while
+		// three engines had failed, which understates exactly the thing this
+		// milestone exists to make visible.
+		dimension == scanner.DimensionEngine
 }
 
 func (r Result) countDisposition(d model.Disposition) int {
@@ -489,10 +501,23 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	invalidateExpiredControls(&res, controls.snapshot(), res.Identities)
 	res.Ownership = summariseOwnership(res.Coverage)
 	res.Ownership.Findings = ownershipFindings(res.Findings)
+
+	// External engine work joins the ledger and the findings. A row is added
+	// whether the engine succeeded or failed, because an engine that failed is
+	// a class nobody assessed and silence about it is how a reader comes to
+	// believe otherwise. An engine nobody enabled gets no row: it was never
+	// planned work, and counting it would inflate "untested" with everything
+	// this tool could conceivably have been configured to do.
+	res.Engines = opts.Engines
+	res.Coverage = append(res.Coverage, opts.Engines.Coverage...)
+	res.Findings = append(res.Findings, opts.Engines.Findings...)
+	res.ToolFailures = append(res.ToolFailures, opts.Engines.Failures...)
 	for f := range failures {
 		res.ToolFailures = append(res.ToolFailures, f)
 	}
-	res.ClassesNotAssessed = qualifyOwnershipClasses(classesNotAssessed(opts.Checks), res.Ownership)
+	res.ClassesNotAssessed = removeEngineCovered(
+		qualifyOwnershipClasses(classesNotAssessed(opts.Checks), res.Ownership),
+		opts.Engines)
 	res.FinishedAt = opts.Now()
 
 	sortResult(&res)
@@ -805,4 +830,46 @@ func lastGoodLabel(st identity.Status) string {
 // and a consumer deduplicating on the id would otherwise lose all but one.
 func ownershipFindingID(checkID string, p check.ResourcePlan) string {
 	return strings.Join([]string{checkID, p.Subject(), p.Fixture.ID, attackerID(p)}, ":")
+}
+
+// removeEngineCovered drops classes an external engine actually assessed.
+//
+// "Actually" is doing the work. A capability is removed only when an engine
+// completed and its normalizer reported the class as covered — which a blocked
+// run, a partial run and a passive ZAP scan all decline to do. Removing a class
+// because a process started would turn launching a binary into a security
+// claim, which is the opposite of what this milestone is for.
+//
+// What is removed is also qualified rather than deleted outright: the class
+// leaves the not-assessed list carrying the engine, its version and its corpus,
+// because "assessed by Nuclei against these templates" and "assessed" are
+// different statements.
+func removeEngineCovered(classes []string, c scanner.Collection) []string {
+	if len(c.Covered) == 0 {
+		return classes
+	}
+	covered := map[string]bool{}
+	for _, cap := range c.Covered {
+		covered[string(cap)] = true
+	}
+	var by []string
+	for _, o := range c.Outcomes {
+		if o.Status == scanner.StatusCompleted {
+			by = append(by, fmt.Sprintf("%s %s (%s)", o.Engine, o.Provenance.Version,
+				o.Provenance.RuleSource))
+		}
+	}
+	sort.Strings(by)
+	qualifier := " — assessed by " + strings.Join(by, "; ") +
+		", whose results are recorded as observed and are not verified by AppSec Framework"
+
+	out := make([]string, 0, len(classes))
+	for _, cl := range classes {
+		if covered[cl] {
+			out = append(out, cl+qualifier)
+			continue
+		}
+		out = append(out, cl)
+	}
+	return out
 }

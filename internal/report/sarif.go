@@ -128,6 +128,10 @@ func severityToLevel(sev string) string {
 	case "low", "info":
 		return "note"
 	default:
+		// "unassessed" lands here deliberately. SARIF has no level for "this
+		// tool has not judged it", and "none" is the closest honest answer —
+		// better than borrowing the reporting engine's own severity, which
+		// would be exactly the silent conversion this project refuses.
 		return "none"
 	}
 }
@@ -199,6 +203,7 @@ func WriteSARIF(w io.Writer, doc Document) error {
 			Properties: map[string]any{
 				"state":                   f.State,
 				"severity":                f.Severity,
+				"externalSource":          f.External,
 				"confidence":              f.Confidence,
 				"identityId":              f.IdentityID,
 				"verificationPerformed":   f.Verification.Performed,
@@ -262,6 +267,12 @@ func WriteSARIF(w io.Writer, doc Document) error {
 				// SARIF-only consumer is not told that a static inference and a
 				// runtime observation are the same thing.
 				"adapters": doc.Adapters,
+				// External engine records travel here so a SARIF consumer can
+				// see which tool produced which result, what version it was,
+				// and which engines failed. SARIF's own tool metadata describes
+				// the *reporting* tool, which is AppSec Framework, so engine
+				// provenance would otherwise be lost.
+				"engines": doc.Engines,
 			},
 		}},
 	}

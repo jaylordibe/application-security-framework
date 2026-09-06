@@ -134,6 +134,86 @@ consumer can detect a change rather than misparse.
   `schemas/appsec.adapter.schema.json` and a test asserting the schema and the parser
   cannot drift apart.
 
+### Added — M4: external engines
+
+- `internal/proc`: one hardened subprocess supervisor, shared with the M3 adapter boundary
+  rather than duplicated. Explicit argument vectors and never a shell, an environment built
+  from nothing, process groups so a cancelled child's descendants die with it, `WaitDelay`
+  against a held-open pipe, and both pipes drained concurrently and bounded.
+- `internal/scanner`: one engine contract every engine shares — identify, detect, gate by
+  profile, invoke, normalise — with a private per-run workspace that is always removed.
+- External results enter as `observed` and stay there. `ToFinding` takes no state
+  parameter, so no caller can produce anything else. AppSec severity is a new
+  `unassessed` value with no rank, which cannot satisfy a policy threshold: an unverified
+  scanner alert can never fail a build. Each engine's own severity and confidence are
+  preserved verbatim in `ExternalSource`.
+- Nuclei, with flags verified against v3.11.x rather than remembered:
+  `-disable-unsigned-templates`, `-no-interactsh` and `-disable-update-check` passed
+  explicitly because they default to unsafe; `-code`, `-headless`,
+  `-allow-local-file-access`, `-follow-redirects`, `-dashboard` and `-proxy` never passed.
+  Templates must be supplied locally and their provenance is recorded, pinned to a commit
+  where the directory is a git checkout.
+- ZAP, run one-shot with a private home inside the run's workspace. Passive mode requires
+  the verification profile; active mode sends attack payloads and requires intrusive. A
+  passive run claims no injection coverage.
+- Semgrep and opengrep behind one integration — the fork shares the CLI and JSON document,
+  so supporting both cost a name in a list. opengrep is preferred on evidence: Semgrep's
+  metrics default to AUTO and its registry rules are licensed for internal use only.
+  Registry rule identifiers are refused; `--metrics=off` is always passed.
+- Secret-bearing engine fields are never imported: Nuclei's `request`, `response` and
+  `curl-command`, and Semgrep's matched source lines. Everything imported is bounded,
+  stripped of control characters and passed through the run's redactor.
+- An `engines` ledger dimension, an `engines` section in the JSON report and SARIF run
+  properties, per-finding engine provenance, and `appsec doctor` reporting each engine's
+  version, path and what it would unlock — without installing anything.
+- Coverage is earned by what ran. A class leaves `classesNotAssessed` only when an engine
+  completed and reported it covered, and even then it stays listed, qualified with the
+  engine, version and corpus.
+- An adversarial fake-engine suite: engines that hang, fork a surviving grandchild, flood
+  stdout, hold a pipe open, crash silently, emit malformed JSON and receive hostile
+  arguments containing shell metacharacters.
+- Integration tests against the real Nuclei, ZAP and Semgrep/opengrep that skip by name
+  when the binary is absent, plus a manual `engine-integration` CI job that installs a
+  pinned Nuclei and fails if its test skips. Ordinary CI installs no engine and stays
+  deterministic.
+- `engines.nuclei.allowUnsignedTemplates`, and a corpus inspection that refuses a template
+  directory Nuclei would execute nothing from.
+- The terminal summary now states each engine's status and the number of observed external
+  results, separately from the confirmed and suspected counts.
+
+### Corrected — M4
+
+- `appsec doctor` previously reported engines as "not implemented yet" and listed them by
+  PATH presence alone. It now resolves each executable, asks its version, and says whether
+  it is enabled — presence on PATH says a file exists, not that it runs.
+- Engine rows were excluded from the headline counters, so a run in which all three engines
+  failed printed `blocked: 0`. An engine run is assessment work against the target, and a
+  failed one is blocked work: the summary that omits it reads cleaner than the run was.
+- `-disable-unsigned-templates` was passed unconditionally. Because an operator's own
+  templates are unsigned, that combination meant Nuclei would exclude the whole corpus,
+  exit `0`, and produce a completed scan reporting no findings after executing no security
+  logic — the precise failure this milestone exists to prevent, caused by a hardening
+  measure. The corpus is now inspected before the process starts, an empty or entirely
+  unsigned one is refused with an explanation, and a waived signature check is recorded in
+  provenance and limitations rather than reported as an enforced control.
+- Imported findings carried an empty `id`, which would collapse every external alert into
+  one row for any consumer deduplicating on it. They now carry a stable identity derived
+  from the engine, rule and location.
+- The terminal printed only `findings: 0 confirmed, 0 suspected` after an engine run, so an
+  operator whose engine reported a dozen criticals read the summary as "found nothing".
+  Observed results are now stated — separately, because folding them into the findings
+  total is the promotion this project refuses to perform.
+- The CI check forbidding Semgrep registry rule packs matched the code that refuses them.
+  A mention must now be annotated as a refusal; anything else still fails.
+
+### Corrected — stale documentation
+
+- The README claimed "One identity at a time… comparing one against another — BOLA, IDOR,
+  cross-tenant reads — is the next milestone", which M2 shipped. The bullet contradicted
+  another three lines above it and has been removed.
+- ADR-0002 ranks framework-native introspection first. It now points at ADR-0014, which
+  changed that default on evidence, so a reader of ADR-0002 alone is not misled.
+
 ### Corrected — M3
 
 - The M3 acceptance criteria named `artisan` and a TypeScript probe. Both execute the

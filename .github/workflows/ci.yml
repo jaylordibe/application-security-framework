@@ -7,6 +7,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The engine-integration job below is opt-in, because it is the only thing
+  # here that installs third-party software.
+  workflow_dispatch:
   schedule:
     # Weekly, so govulncheck reports newly disclosed vulnerabilities in
     # dependencies even when nothing has changed.
@@ -41,8 +44,52 @@ jobs:
       # the same deterministic CI as everything else, with no PHP, Node or
       # dependency installation anywhere in the pipeline.
       - run: go build ./adapters/...
+      # No engine is installed here, so internal/scanner's integration tests
+      # skip. That is deliberate: what they add over the fake-engine suite is
+      # confirmation that a real tool accepts our argument vector, and buying
+      # that would mean making every pull request depend on downloading Nuclei,
+      # a JVM and a Python package. Run them with `-v` after installing an
+      # engine, or through the engine-integration job below.
       - run: go test ./...
       - run: go test -race ./...
+
+  engine-integration:
+    # Opt-in, manual, and never a gate on a pull request. It installs Nuclei so
+    # that the integration tests in internal/scanner run against the real tool
+    # rather than skipping, which is the only way to catch a flag this code
+    # passes that the shipped binary no longer accepts.
+    #
+    # ZAP and Semgrep/opengrep are not installed here. A ZAP passive scan needs
+    # a JVM and runs for minutes, and neither has a version this repository has
+    # verified the CLI surface of; an operator runs those locally, and
+    # docs/engines/README.md says how. Nothing in this job runs against anything
+    # but a local test server.
+    name: real-engine integration (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
+        with:
+          go-version-file: go.mod
+      - name: install Nuclei
+        # Pinned, and built from source with the toolchain already present, so
+        # this adds no binary download to the supply chain. AppSec Framework
+        # itself never does this: installing an engine is the operator's act,
+        # and here CI is the operator.
+        run: go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.11.1
+      - name: integration tests
+        # A skip here would be a green tick for having run nothing, which is
+        # the failure mode this whole milestone is about. The point of
+        # installing Nuclei is that its test must not skip.
+        run: |
+          # Without pipefail the pipe would return tee's status and a failing
+          # test would report success.
+          set -o pipefail
+          go test -v -count=1 -run 'TestNucleiFindsAPlantedMarker' ./internal/scanner/ | tee out.txt
+          if grep -q "^--- SKIP: TestNucleiFindsAPlantedMarker" out.txt; then
+            echo "::error::Nuclei was installed but its integration test skipped"; exit 1
+          fi
 
   quality:
     name: format, vet, static analysis
@@ -91,8 +138,12 @@ jobs:
       # This project's thesis is that tools overstate what they verified. The
       # least we can do is not overstate it about ourselves.
       - name: no Semgrep registry rule packs are referenced
+        # The code that refuses these packs has to name them, so a line may
+        # mention one if it is annotated as a refusal. Anything else is a
+        # reference, and their licence permits internal use only.
         run: |
-          if grep -rIn --exclude-dir=.git --exclude-dir=docs -E '\bp/(default|security-audit|owasp-top-ten|ci)\b' .; then
+          if grep -rIn --exclude-dir=.git --exclude-dir=docs -E '\bp/(default|security-audit|owasp-top-ten|ci)\b' . \
+              | grep -v 'appsec:refuses-registry'; then
             echo "::error::Semgrep registry rules may not be referenced; their licence permits internal use only"
             exit 1
           fi

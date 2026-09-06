@@ -13,8 +13,9 @@ application's own metadata, observes what it *actually* does, and reports the di
 
 **Status: early foundation (v0.x).** Two checks are implemented: declared authentication
 with an authenticated control behind it (M1), and cross-owner resource access (M2).
-Framework adapters supply expectations the specification cannot express (M3, static tier).
-Schemas may change before 1.0. See
+Framework adapters supply expectations the specification cannot express (M3, static tier),
+and external engines can be orchestrated for classes AppSec Framework does not test itself
+(M4). Schemas may change before 1.0. See
 [What AppSec Framework does not do yet](#what-appsec-framework-does-not-do-yet) before
 relying on it. It has not been evaluated for precision or recall against a corpus
 of real applications, so no detection-quality claim is made.
@@ -96,6 +97,35 @@ appsec doctor    # what is installed, and what each missing piece would unlock
 appsec scan http://localhost:3000 --spec ./openapi.json
 appsec scan https://staging.example.com --spec-url https://staging.example.com/openapi.json
 ```
+
+### External engines
+
+```yaml
+engines:
+  nuclei:
+    enabled: true
+    executable: /usr/local/bin/nuclei
+    templates: ./nuclei-templates    # required; nothing is downloaded
+```
+
+AppSec Framework does not reimplement Nuclei's templates, ZAP's active scanner or
+Semgrep's dataflow analysis. It supervises them: explicit argument vectors and never a
+shell, an environment built from nothing so your bearer tokens cannot reach a third-party
+process, process groups so a killed engine cannot leave a JVM or a browser running, and
+budgets on time and output.
+
+**An engine result is an observation, not a finding.** Nuclei saying `critical` is Nuclei's
+opinion of its own template; it is not evidence that your application is exploitable. Every
+imported result is `observed`, AppSec's own severity is `unassessed`, and nothing an engine
+reports can fail your build on its own. Two engines agreeing is not verification either.
+
+**A failed engine makes the report less confident, not quieter.** Missing, crashed, hung,
+flooding or timed-out — each becomes a blocked ledger row saying which classes are
+therefore still unassessed. An engine that did not complete assesses nothing, and a passive
+ZAP scan does not claim the injection classes its active scanner would have tested.
+
+`appsec doctor` reports which engines are installed, what each would unlock, and changes
+nothing on your machine.
 
 ### Framework adapters
 
@@ -246,6 +276,12 @@ one. It withdraws the expectation from both and reports the disagreement — cho
 winner with no evidence would be a guess, and which one won would depend on the order the
 sources happened to be read in.
 
+**An external scanner's confidence is not AppSec's.** ZAP emits four risks and five
+confidences, Nuclei five severities and no confidence, Semgrep three levels. None of those
+scales maps onto another, so none is converted: each engine's own values are preserved
+verbatim beside AppSec's `unassessed`. See
+[ADR-0015](docs/adr/0015-external-engine-boundary.md).
+
 **A cross-owner result needs three requests, not two.** The owner reads the resource, the
 non-owner probes it, and the owner reads it again. The re-check is not padding: without
 it, a record deleted between the first two requests makes the non-owner's 404 look like an
@@ -311,9 +347,15 @@ Being specific about this is part of the product.
   non-owner, one resource is the whole primitive.
 - **No cross-owner `DELETE`.** It destroys the fixture and proves nothing a `PATCH` does
   not.
-- **No engine integrations.** ZAP, Nuclei, Semgrep and Hadrian are designed as optional
-  subprocesses ([ADR-0005](docs/adr/0005-external-engines-are-subprocesses.md)) but none is
-  implemented. `appsec doctor` reports what is on your PATH.
+- **External engines are orchestrated, not verified.** Nuclei, ZAP and Semgrep/opengrep can
+  run behind one hardened boundary, but nothing they report is confirmed by AppSec
+  Framework: an alert enters as `observed` with severity `unassessed` and stays there. No
+  engine has yet been executed against a real installed binary in this repository's own
+  testing, so the milestone is marked partial — see
+  [the roadmap](docs/roadmap.md). Hadrian is not integrated.
+- **You install and configure the engines.** AppSec Framework never downloads or installs
+  one, ships no templates or rules, and will not let an engine fetch its own corpus: a
+  corpus that changed overnight makes two runs incomparable.
 - **Framework adapters read source; they do not ask the framework.** The Laravel and
   NestJS adapters never execute your application, which means they cannot resolve anything
   dynamic — a gate table built in a provider loop, a guard whose semantics they do not
@@ -326,9 +368,6 @@ Being specific about this is part of the product.
   login, no cookie-session establishment, no refresh rotation. Query-string API keys are
   refused deliberately: a credential in a URL reaches error text, reproduction strings and
   every intermediary's access log.
-- **One identity at a time.** Multiple identities can be configured, but comparing one
-  against another — BOLA, IDOR, cross-tenant reads — is the next milestone, not this
-  one.
 - **No AI**, no dashboard, no database, no crawler, no injection payloads.
 - **No measured precision or recall.** The evaluation harness proves the check
   distinguishes paired vulnerable and secure fixtures; it does not establish a
@@ -379,7 +418,9 @@ authentication bypass — a silent pass is the worst possible default for a secu
 | [Threat model](docs/security/threat-model.md) | this framework's own attack surface |
 | [Cross-owner integration](docs/evaluation/cross-owner-integration.md) | running M2 against the two reference APIs |
 | [Writing an adapter](docs/adapters/contract.md) | the contract, in any language |
+| [External engines](docs/engines/README.md) | installing, configuring and what each one covers |
 | [Adapters on real applications](docs/evaluation/adapters-on-reference-applications.md) | what they extract, and what they cannot |
+| [Engines on real applications](docs/evaluation/engines-on-reference-applications.md) | what M4 ran, what it could not, and why M4 is partial |
 | [ADRs](docs/adr/) | consequential decisions and their alternatives |
 | [Roadmap](docs/roadmap.md) | what is next, and what is explicitly out |
 

@@ -143,6 +143,53 @@ adapters:
   #     # to forward it; this tool's own credentials can never be forwarded.
   #     # passEnv: [HOME]
 
+engines:
+  # External scanning engines. AppSec Framework does not reimplement Nuclei's
+  # templates, ZAP's active scanner or Semgrep's dataflow analysis; it
+  # supervises them, keeps them inside your authorization boundary, records
+  # where every result came from, and is explicit about what did not run.
+  #
+  # Every engine result is recorded as OBSERVED. A scanner saying "critical" is
+  # that scanner's opinion of its own rule, not evidence that your application
+  # is exploitable, and two scanners agreeing is not evidence either. Nothing
+  # here can fail your build on its own.
+  #
+  # Engines are off by default and are never installed for you. An engine that
+  # is missing, crashes or times out becomes a blocked ledger row saying what
+  # was not assessed, never a clean result.
+  {}
+  #
+  # sourceRoot: ../my-application   # for engines that read code
+  #
+  # nuclei:
+  #   enabled: true
+  #   executable: /usr/local/bin/nuclei
+  #   # Required. Templates are executable security logic, so you supply them
+  #   # and AppSec Framework records where from. A git checkout is pinned by
+  #   # commit. Nothing is downloaded.
+  #   templates: ./nuclei-templates
+  #   # Nuclei skips unsigned templates. If none of yours is signed — which is
+  #   # the normal case for templates you wrote — it would exit successfully
+  #   # having executed nothing, so AppSec Framework refuses that run unless you
+  #   # state that you trust the directory. Your own templates: say true.
+  #   allowUnsignedTemplates: false
+  #   rateLimit: 50
+  #
+  # zap:
+  #   enabled: true
+  #   executable: /opt/zap/zap.sh
+  #   # "passive" (default) spiders and observes. "active" runs the active
+  #   # scanner, which sends attack payloads and needs profile: intrusive.
+  #   # A passive run does not assess injection and does not claim to.
+  #   mode: passive
+  #
+  # sast:
+  #   enabled: true
+  #   executable: /usr/local/bin/opengrep
+  #   # Required, and must be a local path. AppSec Framework ships no rules and
+  #   # will not pull them from a registry.
+  #   rules: ./sast-rules
+
 discovery:
   # AppSec Framework derives expectations from the application's own
   # specification. Give it one, or let it probe the usual locations on the

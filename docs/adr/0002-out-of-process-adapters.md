@@ -1,7 +1,15 @@
 # ADR-0002: Framework adapters are out-of-process probes with a JSON contract
 
-- **Status:** Accepted
+- **Status:** Accepted, refined by [ADR-0014](0014-adapter-contract-and-extraction-trust.md)
 - **Date:** 2026-09-05
+
+> **Read ADR-0014 before relying on the tier ordering below.** This record ranks
+> framework-native introspection first. Implementing M3 established that asking a
+> framework to describe itself means booting it — and that reaching the point of being
+> able to ask requires installing dependencies, which is itself code execution. Tier 1 is
+> therefore gated behind explicit operator trust and is not the default. The rest of this
+> record — out-of-process, versioned JSON, the core never parsing TypeScript or PHP —
+> stands unchanged.
 
 ## Context
 

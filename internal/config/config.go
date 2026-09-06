@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/resource"
+	"github.com/jaylordibe/application-security-framework/internal/scanner"
 	"github.com/jaylordibe/application-security-framework/internal/scope"
 )
 
@@ -35,6 +37,10 @@ var adapterNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // envPattern constrains an environment variable name to the POSIX shape.
 var envPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// engineSeverityPattern constrains a severity filter to a plain word, so an
+// operator-supplied value reaching an argument vector cannot look like a flag.
+var engineSeverityPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 
 // MaxConfigBytes bounds a configuration file.
 const MaxConfigBytes = 1 << 20 // 1 MiB
@@ -55,6 +61,7 @@ type Config struct {
 	Identities  []Identity  `yaml:"identities"`
 	Resources   []Resource  `yaml:"resources"`
 	Adapters    Adapters    `yaml:"adapters"`
+	Engines     Engines     `yaml:"engines"`
 	Discovery   Discovery   `yaml:"discovery"`
 	Outcome     Outcome     `yaml:"outcome"`
 	Environment Environment `yaml:"environment"`
@@ -259,6 +266,60 @@ type AdapterUse struct {
 	PassEnv []string `yaml:"passEnv"`
 }
 
+// Engines configures external scanning engines.
+//
+// Each engine is a named, known integration rather than a command an operator
+// composes. There is deliberately no `command`, `args` or `env` here: those
+// would make AppSec Framework a general process runner, and the argument-vector
+// construction, minimal environment and profile gating that make an engine safe
+// to run would all become optional.
+type Engines struct {
+	// SourceRoot is an application checkout, for engines that read code.
+	SourceRoot string `yaml:"sourceRoot"`
+	Nuclei     Engine `yaml:"nuclei"`
+	ZAP        Engine `yaml:"zap"`
+	SAST       Engine `yaml:"sast"`
+}
+
+// Engine is one external engine's settings.
+type Engine struct {
+	// Enabled turns the engine on. Engines are off by default: none runs
+	// because it happens to be installed.
+	Enabled bool `yaml:"enabled"`
+	// Executable is an explicit path. Empty means look the engine's own binary
+	// name up on PATH.
+	Executable string `yaml:"executable"`
+	// Templates or Rules is the corpus the engine runs. It must be a local
+	// path: AppSec Framework ships none and fetches none, because a corpus that
+	// changes between runs makes results incomparable and an unrecorded corpus
+	// is an unrecorded dependency.
+	Templates string `yaml:"templates"`
+	Rules     string `yaml:"rules"`
+	// Mode narrows what an engine may do, for engines that have modes. ZAP's
+	// "active" mode sends attack payloads and requires the intrusive profile.
+	Mode string `yaml:"mode"`
+	// Severity optionally narrows which severities an engine reports.
+	Severity []string `yaml:"severity"`
+	// RateLimit bounds requests per second, for engines that send traffic.
+	RateLimit int `yaml:"rateLimit"`
+	// TimeoutSeconds bounds the run.
+	TimeoutSeconds int `yaml:"timeoutSeconds"`
+	// PassEnv names environment variables to forward. The engine's environment
+	// is otherwise built from nothing, and this tool's identity credentials can
+	// never be forwarded whatever is named here.
+	PassEnv []string `yaml:"passEnv"`
+	// AllowUnsignedTemplates lets Nuclei execute templates that carry no
+	// signature.
+	//
+	// It exists because refusing them outright would rule out every template an
+	// operator writes themselves, and defaults to false because a template is
+	// executable security logic that runs against the operator's own target.
+	// Turning it on is a statement that this directory is trusted, and the
+	// provenance of every resulting observation records that nothing else
+	// established it.
+	AllowUnsignedTemplates bool `yaml:"allowUnsignedTemplates"`
+}
+
 // Discovery configures how the attack surface is learned.
 type Discovery struct {
 	// OpenAPIFile is a path to a specification on disk.
@@ -461,6 +522,7 @@ func (c *Config) Validate() error {
 	}
 	problems = append(problems, resource.ValidateAll(c.ResourceFixtures(), known)...)
 	problems = append(problems, c.validateAdapters()...)
+	problems = append(problems, c.validateEngines()...)
 
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "\n  - "))
@@ -552,6 +614,92 @@ func (c Config) validateAdapters() []string {
 		}
 	}
 	return problems
+}
+
+// validateEngines checks the external engine configuration.
+func (c Config) validateEngines() []string {
+	var problems []string
+	named := map[string]Engine{
+		"nuclei": c.Engines.Nuclei, "zap": c.Engines.ZAP, "sast": c.Engines.SAST,
+	}
+	for _, name := range []string{"nuclei", "sast", "zap"} {
+		e := named[name]
+		path := "engines." + name
+		if !e.Enabled {
+			continue
+		}
+		if e.TimeoutSeconds < 0 || e.TimeoutSeconds > 7200 {
+			problems = append(problems, path+".timeoutSeconds must be between 0 and 7200")
+		}
+		if e.RateLimit < 0 || e.RateLimit > 1000 {
+			problems = append(problems, path+".rateLimit must be between 0 and 1000")
+		}
+		for i, v := range e.PassEnv {
+			if !envPattern.MatchString(v) {
+				problems = append(problems, fmt.Sprintf("%s.passEnv[%d] %q is not a valid "+
+					"environment variable name", path, i, v))
+			}
+		}
+		for i, v := range e.Severity {
+			if !engineSeverityPattern.MatchString(v) {
+				problems = append(problems, fmt.Sprintf("%s.severity[%d] %q is not a plain "+
+					"severity name", path, i, v))
+			}
+		}
+		switch name {
+		case "nuclei":
+			if e.Templates == "" {
+				problems = append(problems, path+".templates is required when nuclei is enabled; "+
+					"AppSec Framework will not let it fetch templates for itself, because a scan "+
+					"against a corpus that changed overnight is not reproducible")
+			}
+		case "sast":
+			if e.Rules == "" {
+				problems = append(problems, path+".rules is required when sast is enabled; AppSec "+
+					"Framework ships no rules and will not pull them from a registry")
+			}
+			if c.Engines.SourceRoot == "" {
+				problems = append(problems, "engines.sourceRoot is required when sast is enabled; "+
+					"a static analyser needs an application checkout to read")
+			}
+		case "zap":
+			if e.Mode != "" && e.Mode != "passive" && e.Mode != "active" {
+				problems = append(problems, path+`.mode must be "passive" or "active"`)
+			}
+			if e.Mode == "active" && c.Profile() != model.ProfileIntrusive {
+				problems = append(problems, "engines.zap.mode is active, which sends attack "+
+					"payloads and requires assessment.profile: intrusive")
+			}
+		}
+	}
+	return problems
+}
+
+// EngineSettings maps a configured engine onto the scanner package's settings.
+func (e Engine) EngineSettings() scanner.Settings {
+	s := scanner.Settings{
+		Enabled:        e.Enabled,
+		Executable:     e.Executable,
+		TimeoutSeconds: e.TimeoutSeconds,
+		PassEnv:        e.PassEnv,
+		Severity:       e.Severity,
+		Extra:          map[string]string{},
+	}
+	// One of the two corpus fields, whichever the engine uses.
+	s.RuleSource = e.Templates
+	if s.RuleSource == "" {
+		s.RuleSource = e.Rules
+	}
+	if e.Mode != "" {
+		s.Extra["mode"] = e.Mode
+	}
+	if e.RateLimit > 0 {
+		s.Extra["rateLimit"] = strconv.Itoa(e.RateLimit)
+	}
+	if e.AllowUnsignedTemplates {
+		s.Extra["allowUnsignedTemplates"] = "true"
+	}
+	return s
 }
 
 // AdapterTrust returns the effective trust mode.

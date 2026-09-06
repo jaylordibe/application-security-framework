@@ -18,6 +18,7 @@ import (
 	"github.com/jaylordibe/application-security-framework/internal/engine"
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
+	"github.com/jaylordibe/application-security-framework/internal/scanner"
 )
 
 // SchemaVersion identifies the output contract. It is the first field of every
@@ -49,7 +50,11 @@ type Document struct {
 	Ownership Ownership `json:"ownership"`
 	// Adapters records what framework adapters contributed and what they could
 	// not determine. It carries source locations, never source contents.
-	Adapters AdapterAccount  `json:"adapters"`
+	Adapters AdapterAccount `json:"adapters"`
+	// Engines records what each external scanning engine did, and what it did
+	// not. An engine that failed assessed nothing, and that must not read the
+	// same as an engine that found nothing.
+	Engines  EngineAccount   `json:"engines"`
 	Findings []Finding       `json:"findings"`
 	Coverage []CoverageEntry `json:"coverage"`
 
@@ -188,6 +193,42 @@ type AdapterConflict struct {
 	Source string `json:"source,omitempty"`
 }
 
+// EngineAccount is the external-engine section of a report.
+type EngineAccount struct {
+	// Statement says in words what engine results do and do not mean.
+	Statement string `json:"statement"`
+	// Runs describes each engine that was enabled.
+	Runs []EngineRun `json:"runs,omitempty"`
+	// Failures name engines that produced nothing usable.
+	Failures []string `json:"failures,omitempty"`
+	// Limitations are what the engines could not do.
+	Limitations []string `json:"limitations,omitempty"`
+}
+
+// EngineRun is one external engine's execution record.
+type EngineRun struct {
+	Engine  string `json:"engine"`
+	Status  string `json:"status"`
+	Version string `json:"version,omitempty"`
+	// ExecutablePath says which program ran, rather than which name was on
+	// PATH.
+	ExecutablePath string `json:"executablePath,omitempty"`
+	// ProvenanceVerified is false for anything a user installed. AppSec
+	// Framework cannot establish that a binary is a genuine upstream build and
+	// does not imply a chain of custody it has not checked.
+	ProvenanceVerified bool `json:"provenanceVerified"`
+	// RuleSource identifies the templates or rules that ran, which is what
+	// makes a result reproducible.
+	RuleSource string `json:"ruleSource,omitempty"`
+	// Arguments is the redacted argument vector.
+	Arguments []string `json:"arguments,omitempty"`
+	Cause     string   `json:"cause,omitempty"`
+	Detail    string   `json:"detail,omitempty"`
+	// Observations counts what it contributed.
+	Observations int   `json:"observations"`
+	DurationMS   int64 `json:"durationMs"`
+}
+
 // Surface describes what was discovered and how much it can be trusted.
 type Surface struct {
 	SpecDerived    bool     `json:"specDerived"`
@@ -219,24 +260,46 @@ type Oracle struct {
 
 // Finding is a published finding.
 type Finding struct {
-	ID           string       `json:"id"`
-	CheckID      string       `json:"checkId"`
-	Title        string       `json:"title"`
-	State        string       `json:"state"`
-	Severity     string       `json:"severity"`
-	Confidence   string       `json:"confidence"`
-	CWE          []string     `json:"cwe,omitempty"`
-	OWASP        []string     `json:"owasp,omitempty"`
-	OperationID  string       `json:"operationId,omitempty"`
-	IdentityID   string       `json:"identityId,omitempty"`
-	ResourceID   string       `json:"resourceId,omitempty"`
-	OwnerID      string       `json:"ownerIdentityId,omitempty"`
-	Expected     string       `json:"expected"`
-	Actual       string       `json:"actual"`
-	EvidenceRefs []string     `json:"evidenceRefs,omitempty"`
-	Verification Verification `json:"verification"`
-	Remediation  string       `json:"remediation,omitempty"`
-	Reproduction []string     `json:"reproduction,omitempty"`
+	ID          string   `json:"id"`
+	CheckID     string   `json:"checkId"`
+	Title       string   `json:"title"`
+	State       string   `json:"state"`
+	Severity    string   `json:"severity"`
+	Confidence  string   `json:"confidence"`
+	CWE         []string `json:"cwe,omitempty"`
+	OWASP       []string `json:"owasp,omitempty"`
+	OperationID string   `json:"operationId,omitempty"`
+	IdentityID  string   `json:"identityId,omitempty"`
+	ResourceID  string   `json:"resourceId,omitempty"`
+	OwnerID     string   `json:"ownerIdentityId,omitempty"`
+	// External carries the engine's own account of an imported observation.
+	// Its severity and confidence are the engine's scales, not AppSec's.
+	External     *ExternalSource `json:"externalSource,omitempty"`
+	Expected     string          `json:"expected"`
+	Actual       string          `json:"actual"`
+	EvidenceRefs []string        `json:"evidenceRefs,omitempty"`
+	Verification Verification    `json:"verification"`
+	Remediation  string          `json:"remediation,omitempty"`
+	Reproduction []string        `json:"reproduction,omitempty"`
+}
+
+// ExternalSource is an imported result's provenance.
+type ExternalSource struct {
+	Engine         string `json:"engine"`
+	EngineVersion  string `json:"engineVersion,omitempty"`
+	ExecutablePath string `json:"executablePath,omitempty"`
+	RunID          string `json:"runId,omitempty"`
+	RuleID         string `json:"ruleId"`
+	RuleName       string `json:"ruleName,omitempty"`
+	// Severity and Confidence are the engine's own values, unconverted. AppSec
+	// Framework's severity for these findings is "unassessed", which is the
+	// truthful answer: it has not judged them.
+	Severity       string   `json:"sourceSeverity,omitempty"`
+	Confidence     string   `json:"sourceConfidence,omitempty"`
+	Location       string   `json:"location,omitempty"`
+	Parameter      string   `json:"parameter,omitempty"`
+	References     []string `json:"references,omitempty"`
+	RuleProvenance string   `json:"ruleProvenance,omitempty"`
 }
 
 // Verification explains how far a hypothesis was tested.
@@ -348,6 +411,7 @@ func Build(res engine.Result, version string) Document {
 			IdentityID:   f.IdentityID,
 			ResourceID:   f.ResourceID,
 			OwnerID:      f.OwnerIdentityID,
+			External:     externalSource(f.External),
 			Expected:     f.Expected,
 			Actual:       f.Actual,
 			EvidenceRefs: f.EvidenceRefs,
@@ -379,6 +443,7 @@ func Build(res engine.Result, version string) Document {
 	}
 
 	doc.Adapters = buildAdapterAccount(res.Surface)
+	doc.Engines = buildEngineAccount(res.Engines)
 	doc.Ownership = Ownership{
 		Statement:          res.Ownership.Statement,
 		BoundariesVerified: res.Ownership.Verified,
@@ -513,6 +578,45 @@ func buildAdapterAccount(s engine.Surface) AdapterAccount {
 	return a
 }
 
+// externalSource maps imported provenance onto the wire format.
+func externalSource(e *model.ExternalSource) *ExternalSource {
+	if e == nil {
+		return nil
+	}
+	return &ExternalSource{
+		Engine: e.Engine, EngineVersion: e.EngineVersion, ExecutablePath: e.ExecutablePath,
+		RunID: e.RunID, RuleID: e.RuleID, RuleName: e.RuleName,
+		Severity: e.Severity, Confidence: e.Confidence,
+		Location: e.Location, Parameter: e.Parameter,
+		References: e.References, RuleProvenance: e.RuleProvenance,
+	}
+}
+
+// buildEngineAccount summarises what the external engines did.
+func buildEngineAccount(c scanner.Collection) EngineAccount {
+	a := EngineAccount{
+		Statement:   c.Statement(),
+		Failures:    nonNil(c.Failures),
+		Limitations: nonNil(c.Limitations),
+	}
+	for _, o := range c.Outcomes {
+		a.Runs = append(a.Runs, EngineRun{
+			Engine:             o.Engine,
+			Status:             string(o.Status),
+			Version:            o.Provenance.Version,
+			ExecutablePath:     o.Provenance.ExecutablePath,
+			ProvenanceVerified: o.Provenance.Verified,
+			RuleSource:         o.Provenance.RuleSource,
+			Arguments:          o.Provenance.Arguments,
+			Cause:              string(o.Cause),
+			Detail:             o.Detail,
+			Observations:       len(o.Observations),
+			DurationMS:         o.Duration.Milliseconds(),
+		})
+	}
+	return a
+}
+
 // authenticatedControlStatement says what the run could establish about the
 // identities it was given.
 //
@@ -617,9 +721,66 @@ func Summary(doc Document) string {
 		b.WriteString(wrap(o.Statement, 76, "  "))
 	}
 
+	// External engine results are stated in the terminal too.
+	//
+	// They are neither confirmed nor suspected — an imported alert is observed
+	// — so without this an operator whose Nuclei reported twelve criticals
+	// reads "findings: 0 confirmed, 0 suspected" and concludes the engine found
+	// nothing. The count is deliberately not folded into the findings line:
+	// these are another tool's claims, and merging them would be exactly the
+	// promotion this project refuses to do.
+	var ran []EngineRun
+	for _, r := range doc.Engines.Runs {
+		// An engine nobody enabled is not a result. Listing it would pad the
+		// summary with work that was never planned.
+		if r.Status != string(scanner.StatusSkipped) {
+			ran = append(ran, r)
+		}
+	}
+	if len(ran) > 0 {
+		b.WriteString("\n")
+		for _, r := range ran {
+			line := "  engine " + r.Engine + ": " + r.Status
+			if r.Version != "" {
+				line += " (" + r.Version + ")"
+			}
+			switch {
+			case r.Status == string(scanner.StatusBlocked):
+				// The detail already names what was lost.
+			case r.Observations == 1:
+				line += ", 1 observation"
+			default:
+				line += ", " + strconv.Itoa(r.Observations) + " observations"
+			}
+			b.WriteString(line + "\n")
+		}
+		if n := observedCount(doc.Findings); n > 0 {
+			sentence := strconv.Itoa(n) + " external results are recorded as observed. They are " +
+				"another tool's claims, unverified by AppSec Framework, and are not counted as " +
+				"confirmed or suspected findings."
+			if n == 1 {
+				sentence = "1 external result is recorded as observed. It is another tool's " +
+					"claim, unverified by AppSec Framework, and is not counted as a confirmed " +
+					"or suspected finding."
+			}
+			b.WriteString(wrap(sentence, 76, "  "))
+		}
+	}
+
 	b.WriteString("\n")
 	b.WriteString(wrap(doc.Assurance.Statement, 76, "  "))
 	return b.String()
+}
+
+// observedCount counts findings imported from an external engine.
+func observedCount(findings []Finding) int {
+	n := 0
+	for _, f := range findings {
+		if f.State == string(model.StateObserved) {
+			n++
+		}
+	}
+	return n
 }
 
 // wrap breaks text to a display width for terminal output.

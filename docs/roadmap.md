@@ -13,7 +13,7 @@ disappear.** A milestone that adds surface without removing a limitation is defe
 
 Delivered in this repository, with tests.
 
-Research and justification; threat model; architecture and fourteen ADRs; the domain model;
+Research and justification; threat model; architecture and fifteen ADRs; the domain model;
 scope enforcement; the HTTP client; capture-time redaction; OpenAPI ingestion with oracle
 grading; outcome classification; one check with a verification ladder; the coverage
 ledger; JSON and SARIF reporting; the run store; the offline evaluation harness; CI.
@@ -183,26 +183,97 @@ See threat model T-18.
 
 ---
 
-## Next — M4: External engines
+## Done (partial) — M4: External engines
 
-**Removes the limitation:** whole weakness classes are listed in `classesNotAssessed` with
-nothing able to address them.
+**Removes the limitation:** whole weakness classes were listed in
+`classesNotAssessed` with nothing able to address them, because this project
+deliberately does not reinvent mature scanners.
 
-Integrated in this order, each behind the same boundary: Nuclei (single static binary,
-MIT, lowest integration cost), then ZAP, then Semgrep or opengrep.
+| Task | Acceptance criteria | Delivered |
+|---|---|---|
+| Engine process supervision | Process groups so a killed engine does not orphan a JVM or a browser; `WaitDelay` so a hung child cannot block; both pipes drained concurrently; byte and time budgets; a minimal explicit environment so target credentials never leak into a third-party process. | ✅ One supervisor in `internal/proc`, shared with the M3 adapter boundary so there is a single implementation. Proven with a fake engine that hangs, forks a surviving grandchild, floods, and holds a pipe open. |
+| Normalisation | Engine output enters as `observed`, never as `confirmed`. Source severity and confidence scales are preserved verbatim rather than converted. | ✅ `ToFinding` takes no state parameter; AppSec severity is `unassessed`, which has no rank and cannot satisfy a policy threshold. |
+| Failure isolation | A crashed engine is a `blocked` row plus a recorded tool failure. It is never an absence of findings. | ✅ Missing, crashed, hung, flooding, malformed and profile-refused engines all produce a blocked row whose text says what was lost. A failed engine cannot remove a class from `classesNotAssessed`. |
+| Nuclei hardening | `-disable-unsigned-templates`, never `-code`, pinned and checksummed templates, local network access restricted, Interactsh self-hosted or disabled. | ✅ with the flags verified against Nuclei v3.11.x rather than assumed, and with a corpus that would execute nothing refused before the process starts — see below. |
 
-| Task | Acceptance criteria |
-|---|---|
-| Engine process supervision | Process groups so a killed engine does not orphan a JVM or a browser; `WaitDelay` so a hung child cannot block; both pipes drained concurrently; byte and time budgets; a minimal explicit environment so target credentials never leak into a third-party process. |
-| Normalisation | Engine output enters as `observed`, never as `confirmed`. Source severity and confidence scales are preserved verbatim rather than converted. |
-| Failure isolation | A crashed engine is a `blocked` row plus a recorded tool failure. It is never an absence of findings. |
-| Nuclei hardening | `-disable-unsigned-templates`, never `-code`, pinned and checksummed templates, local network access restricted, Interactsh self-hosted or disabled. |
+### The flags in the criteria were checked, not copied
 
-**Non-goals:** bundling any engine; shipping Semgrep registry rules; writing templates.
+`-disable-unsigned-templates` and `-code` exist as written. The rest needed
+verifying against the current CLI, and the distinction that matters turned out
+to be which unsafe behaviours are already off:
+
+- **Off by default, so never passed:** `-code`, `-headless`,
+  `-allow-local-file-access`, `-follow-redirects`, `-dashboard`,
+  `-cloud-upload`, `-proxy`.
+- **On by default, so disabled explicitly:** `-disable-unsigned-templates`
+  (`-dut`), `-no-interactsh` (`-ni`), `-disable-update-check` (`-duc`).
+- Structured output is `-jsonl`, not `-json`.
+
+"Pinned and checksummed templates" became something achievable: Nuclei refuses to
+run without an operator-supplied template directory, and the corpus is recorded —
+by commit where it is a git checkout, and explicitly as *unpinned* where it is
+not. AppSec Framework does not bundle, download or checksum somebody else's
+template corpus.
+
+`-disable-unsigned-templates` then turned out to need a second decision. Templates
+an operator writes themselves are unsigned, so passing the flag unconditionally
+meant Nuclei would exclude the entire corpus, exit successfully, and produce a
+scan reporting no findings after executing no security logic — the milestone's own
+forbidden outcome, caused by a hardening measure. The corpus is now inspected
+before the process starts: an empty one, or one in which nothing is signed, is
+refused with an explanation, and `engines.nuclei.allowUnsignedTemplates` is the
+deliberate opt-in for an operator's own templates. A waived signature check is
+recorded in the provenance of every observation and in the report's limitations,
+so a control that was turned off is never described as one that held.
+
+### Semgrep or opengrep: both, and why that was cheap
+
+opengrep is a fork of Semgrep's open-source engine: both LGPL-2.1, same
+`--config`, same `--json` document. Supporting the second cost a name in a list,
+so the criterion's "Semgrep or opengrep" is answered with either. opengrep is
+preferred when both are installed, on evidence: Semgrep's metrics default to
+`AUTO`, which sends telemetry when rules come from its registry, and those
+registry rules are licensed for internal use only — which is why this repository
+already has a CI check forbidding references to them.
+
+### Why this milestone is partial
+
+**No engine was executed against a real binary.** None of Nuclei, ZAP or
+Semgrep/opengrep is installed in the environment this was built in, and
+installing one would have meant AppSec Framework's own development doing exactly
+what §33 forbids the tool from doing.
+
+What that means concretely:
+
+- The boundary is proven, adversarially, against fake engines that hang, fork,
+  flood, crash, lie about their version and emit malformed output. Those tests
+  exercise the supervision, and supervision is what M4 is actually about.
+- Each engine's argument vector and output normalisation are covered by unit
+  tests against real output samples of the shape each tool emits.
+- **Not demonstrated:** that a real `nuclei -jsonl` invocation produces exactly
+  the fields normalised here, that `zap.sh -cmd -quickout` writes exactly this
+  report shape, or that these flags are accepted by the installed versions.
+
+Integration tests against the real binaries now exist and skip, by name, when one
+is absent — `go test -v -run FindsAPlantedMarker ./internal/scanner/` says which.
+In this environment all three skipped, and a skip is not a pass. CI installs no
+engine and they skip there too; the manual `engine-integration` workflow installs
+a pinned Nuclei and **fails if its test skips**, so the one thing a fake engine
+cannot prove — that the shipped tool accepts this argument vector — has a way to
+be proven that does not put a third-party download on every pull request.
+
+The run itself is written up in
+[docs/evaluation/engines-on-reference-applications.md](evaluation/engines-on-reference-applications.md),
+including the two defects writing it exposed: the headline summary counted a
+failed engine as `blocked: 0`, and an all-unsigned template corpus would have
+produced a completed Nuclei scan that executed nothing.
+
+**Non-goals held:** no engine is bundled, no Semgrep registry rules are shipped
+or referenced, no rule or template corpus is written, and nothing is installed.
 
 ---
 
-## M5 — Surface beyond the specification
+## Next — M5: Surface beyond the specification
 
 **Removes the limitation:** undocumented routes are invisible, so the ledger measures
 coverage of a surface handed to us by the thing being audited.

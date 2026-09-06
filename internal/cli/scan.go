@@ -26,6 +26,10 @@ import (
 	"github.com/jaylordibe/application-security-framework/internal/openapi"
 	"github.com/jaylordibe/application-security-framework/internal/outcome"
 	"github.com/jaylordibe/application-security-framework/internal/redact"
+	"github.com/jaylordibe/application-security-framework/internal/scanner"
+	"github.com/jaylordibe/application-security-framework/internal/scanner/nuclei"
+	"github.com/jaylordibe/application-security-framework/internal/scanner/sast"
+	"github.com/jaylordibe/application-security-framework/internal/scanner/zap"
 	"github.com/jaylordibe/application-security-framework/internal/scope"
 	"github.com/jaylordibe/application-security-framework/internal/store"
 )
@@ -277,6 +281,28 @@ func runScan(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) e
 			"cross-owner work can run")
 	}
 
+	// External engines run before the assessment is assembled, because what
+	// they did or did not do changes the coverage account. They are opt-in:
+	// nothing here executes unless the operator enabled an engine.
+	engines := scanner.RunAll(ctx, []scanner.Registered{
+		{Engine: nuclei.New(), Settings: cfg.Engines.Nuclei.EngineSettings()},
+		{Engine: zap.New(), Settings: cfg.Engines.ZAP.EngineSettings()},
+		{Engine: sast.New(), Settings: cfg.Engines.SAST.EngineSettings()},
+	}, scanner.Target{
+		BaseURL:    cfg.Target.BaseURL,
+		SourceRoot: cfg.Engines.SourceRoot,
+		Profile:    cfg.Profile(),
+	}, scanner.Options{
+		// This tool's own identity credentials can never reach a scanner.
+		ForbiddenEnv: cfg.CredentialEnvNames(),
+		Redactor:     red,
+		RunID:        runID,
+		Now:          now,
+	})
+	for _, f := range engines.Failures {
+		fmt.Fprintf(stderr, "appsec: %s\n", f)
+	}
+
 	res, err := engine.Run(ctx, engine.Options{
 		RunID:                runID,
 		Target:               cfg.Target.BaseURL,
@@ -295,6 +321,7 @@ func runScan(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) e
 		Resources:            fixtures,
 		ResourceCheck:        check.CrossOwner{Signals: signals, Now: now},
 		Now:                  now,
+		Engines:              engines,
 		EvidenceSink:         run.PutEvidence,
 	})
 	if err != nil {

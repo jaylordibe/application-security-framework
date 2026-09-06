@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jaylordibe/application-security-framework/internal/config"
+	"github.com/jaylordibe/application-security-framework/internal/scanner"
+	"github.com/jaylordibe/application-security-framework/internal/scanner/nuclei"
+	"github.com/jaylordibe/application-security-framework/internal/scanner/sast"
+	"github.com/jaylordibe/application-security-framework/internal/scanner/zap"
 	"github.com/jaylordibe/application-security-framework/internal/store"
 )
 
@@ -43,13 +48,11 @@ func newDoctorCommand(stdout, stderr io.Writer) *cobra.Command {
 
 			reportIdentities(stdout, configPath)
 
-			fmt.Fprintln(stdout, "\nOptional external engines (none are bundled; none are required)")
+			reportEngines(cmd.Context(), stdout, configPath)
+
+			fmt.Fprintln(stdout, "\nOther optional tools (none are bundled; none are required)")
 			tools := []engineTool{
-				{name: "OWASP ZAP", binary: "zap.sh", unlocks: "runtime DAST: injection, XSS, SSRF and related classes"},
-				{name: "Nuclei", binary: "nuclei", unlocks: "known CVEs, misconfigurations, technology fingerprints"},
-				{name: "Semgrep", binary: "semgrep", unlocks: "source analysis (bring your own rules; registry rules are not redistributable)"},
-				{name: "opengrep", binary: "opengrep", unlocks: "source analysis with cross-function taint"},
-				{name: "Hadrian", binary: "hadrian", unlocks: "multi-identity authorization testing"},
+				{name: "Hadrian", binary: "hadrian", unlocks: "multi-identity authorization testing (not integrated)"},
 			}
 			for i := range tools {
 				if _, err := exec.LookPath(tools[i].binary); err == nil {
@@ -60,8 +63,9 @@ func newDoctorCommand(stdout, stderr io.Writer) *cobra.Command {
 				fmt.Fprintf(stdout, "  %-22s %-10s %s\n", tools[i].name, tools[i].status, tools[i].unlocks)
 			}
 
-			fmt.Fprintln(stdout, "\nNote: engine integrations are not implemented yet. This command reports what\n"+
-				"is on your PATH so that a future run can say precisely what it could not use.")
+			fmt.Fprintln(stdout, "\nNote: AppSec Framework never downloads or installs an engine, and this command\n"+
+				"changes nothing on this machine. An engine that is absent is reported as blocked\n"+
+				"during a scan, never as a clean result.")
 			return nil
 		},
 	}
@@ -112,4 +116,63 @@ func reportIdentities(stdout io.Writer, configPath string) {
 				"no liveness canary; an expiry during a run could not be detected")
 		}
 	}
+}
+
+// reportEngines says what each external engine could do on this machine.
+//
+// It resolves executables and asks them their version, which is what "usable"
+// actually means; reporting presence on PATH alone would say a binary exists
+// without saying whether it runs. It changes nothing: no download, no install,
+// no scan.
+func reportEngines(ctx context.Context, stdout io.Writer, configPath string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	fmt.Fprintln(stdout, "\nExternal scanning engines (none are bundled; none are required)")
+
+	// Settings from the configuration when there is one, so `doctor` reports on
+	// the engines this project is actually set up to use.
+	settings := map[string]scanner.Settings{}
+	if cfg, err := loadConfigIfPresent(configPath); err == nil {
+		settings["nuclei"] = cfg.Engines.Nuclei.EngineSettings()
+		settings["zap"] = cfg.Engines.ZAP.EngineSettings()
+		settings["sast"] = cfg.Engines.SAST.EngineSettings()
+	}
+
+	for _, e := range []scanner.Engine{nuclei.New(), zap.New(), sast.New()} {
+		meta := e.Meta()
+		avail := e.Detect(ctx, settings[meta.ID])
+		status := "not found"
+		if avail.Present {
+			status = "found " + avail.Version
+		}
+		enabled := "disabled"
+		if settings[meta.ID].Enabled {
+			enabled = "enabled"
+		}
+		fmt.Fprintf(stdout, "  %-12s %-18s %-9s %s\n", meta.Title, status, enabled, meta.Unlocks)
+		if !avail.Present {
+			fmt.Fprintf(stdout, "  %-12s %s\n", "", meta.InstallHint)
+			if avail.Problem != "" {
+				fmt.Fprintf(stdout, "  %-12s %s\n", "", avail.Problem)
+			}
+			continue
+		}
+		fmt.Fprintf(stdout, "  %-12s at %s\n", "", avail.Path)
+		for _, w := range avail.Warnings {
+			fmt.Fprintf(stdout, "  %-12s note: %s\n", "", w)
+		}
+	}
+}
+
+// loadConfigIfPresent reads the configuration when one exists.
+func loadConfigIfPresent(configPath string) (config.Config, error) {
+	path := configPath
+	if path == "" {
+		if _, err := os.Stat("appsec.yaml"); err != nil {
+			return config.Config{}, err
+		}
+		path = "appsec.yaml"
+	}
+	return config.Load(path)
 }

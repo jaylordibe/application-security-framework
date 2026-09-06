@@ -9,6 +9,7 @@ import (
 	"github.com/jaylordibe/application-security-framework/internal/check"
 	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
+	"github.com/jaylordibe/application-security-framework/internal/scanner"
 )
 
 // The ledger gained a second dimension in M1. The headline counts must keep
@@ -22,15 +23,20 @@ func TestCountersIgnoreTheIdentityDimension(t *testing.T) {
 		// probed a boundary has not "executed no checks".
 		{Dimension: DimensionOwnership, Disposition: model.DispositionExecuted},
 		{Dimension: DimensionOwnership, Disposition: model.DispositionBlocked},
+		// External engine work is assessment too: an engine that failed is
+		// blocked work against the target, and a summary that omits it reads
+		// as cleaner than the run was.
+		{Dimension: scanner.DimensionEngine, Disposition: model.DispositionExecuted},
+		{Dimension: scanner.DimensionEngine, Disposition: model.DispositionBlocked},
 		// Identity rows are preconditions and must not be.
 		{Dimension: DimensionIdentity, Disposition: model.DispositionExecuted},
 		{Dimension: DimensionIdentity, Disposition: model.DispositionBlocked},
 	}}
-	if got := res.ExecutedCount(); got != 2 {
-		t.Errorf("ExecutedCount = %d, want 2", got)
+	if got := res.ExecutedCount(); got != 3 {
+		t.Errorf("ExecutedCount = %d, want 3", got)
 	}
-	if got := res.BlockedCount(); got != 2 {
-		t.Errorf("BlockedCount = %d, want 2", got)
+	if got := res.BlockedCount(); got != 3 {
+		t.Errorf("BlockedCount = %d, want 3", got)
 	}
 }
 
