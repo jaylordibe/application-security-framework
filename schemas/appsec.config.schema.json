@@ -120,6 +120,118 @@
         }
       }
     },
+    "identities": {
+      "type": "array",
+      "description": "Security principals AppSec Framework may act as. A credential is never written here: only a reference to an environment variable or a file. M1 uses the first identity as the authenticated control; choosing between identities is an M2 concern.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "authentication"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "not": {
+              "const": "anonymous"
+            },
+            "description": "Stable identity name used in the coverage ledger and reports. \"anonymous\" is reserved for the built-in credential-free identity."
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable description of the principal."
+          },
+          "authentication": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "credential"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "bearer",
+                  "apiKey"
+                ],
+                "description": "bearer sends Authorization: Bearer <credential>. apiKey sends a configured header. OAuth2, OIDC, browser login and cookie-session flows are not supported."
+              },
+              "header": {
+                "type": "string",
+                "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$",
+                "description": "Header carrying the credential, for the apiKey type. Validated as an RFC 9110 field name. Headers controlling message framing, the connection, or the tool's identifiability are refused."
+              },
+              "valuePrefix": {
+                "type": "string",
+                "description": "Prepended to the credential for the apiKey type, e.g. \"Token \"."
+              },
+              "credential": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Where the secret is read from. Exactly one of env or file. A literal credential value is deliberately not accepted.",
+                "properties": {
+                  "env": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                    "description": "Environment variable holding the credential."
+                  },
+                  "file": {
+                    "type": "string",
+                    "description": "File whose contents are the credential. Whitespace is trimmed."
+                  }
+                },
+                "oneOf": [
+                  {
+                    "required": [
+                      "env"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "file"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "liveness": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path"
+            ],
+            "description": "A safe, authentication-requiring operation probed to establish whether the identity is still usable. Without one, a credential expiring mid-run cannot be detected.",
+            "properties": {
+              "method": {
+                "enum": [
+                  "GET",
+                  "HEAD",
+                  "OPTIONS"
+                ],
+                "description": "Defaults to GET. A canary runs repeatedly, so it must be a safe method."
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^/",
+                "description": "Resolved against target.baseURL and subject to the scope policy."
+              },
+              "expectStatus": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 599
+                },
+                "description": "Statuses meaning the identity is still good. Empty means any 2xx."
+              }
+            }
+          }
+        }
+      }
+    },
     "discovery": {
       "type": "object",
       "additionalProperties": false,

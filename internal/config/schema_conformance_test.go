@@ -58,6 +58,41 @@ func validateAgainstSchema(t *testing.T, schema *jsonschema.Schema, doc string) 
 
 // validDocuments must be accepted by both the parser and the schema.
 var validDocuments = map[string]string{
+	"bearer identity": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://localhost:3000
+identities:
+  - id: admin
+    label: Administrator
+    authentication:
+      type: bearer
+      credential:
+        env: APPSEC_ADMIN_TOKEN
+    liveness:
+      method: GET
+      path: /api/me
+      expectStatus: [200]
+`,
+	"api key identity from a file": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://localhost:3000
+identities:
+  - id: service
+    authentication:
+      type: apiKey
+      header: X-API-Key
+      valuePrefix: "Token "
+      credential:
+        file: /run/secrets/service-key
+`,
+	"no identities": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://localhost:3000
+identities: []
+`,
 	"minimal": `
 apiVersion: appsec/v1alpha1
 target:
@@ -161,6 +196,103 @@ target:
 apiVersion: appsec/v99
 target:
   baseURL: http://x.test
+`,
+	"identity id is reserved": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: anonymous
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+`,
+	"identity id is not a slug": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: "Admin User"
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+`,
+	"unsupported authentication type": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: admin
+    authentication:
+      type: oauth2
+      credential: {env: A_TOKEN}
+`,
+	"credential header name is not a token": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: admin
+    authentication:
+      type: apiKey
+      header: "X-Key: injected"
+      credential: {env: A_TOKEN}
+`,
+	"credential has neither env nor file": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: admin
+    authentication:
+      type: bearer
+      credential: {}
+`,
+	"credential has both env and file": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: admin
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN, file: /tmp/t}
+`,
+	"a literal credential value is not a field": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: admin
+    authentication:
+      type: bearer
+      token: supersecret
+      credential: {env: A_TOKEN}
+`,
+	"canary path is not absolute": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: admin
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+    liveness:
+      path: api/me
+`,
+	"canary method is unsafe": `
+apiVersion: appsec/v1alpha1
+target:
+  baseURL: http://x.test
+identities:
+  - id: admin
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+    liveness:
+      method: DELETE
+      path: /api/me
 `,
 }
 

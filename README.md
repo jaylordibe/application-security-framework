@@ -11,9 +11,10 @@ application's own metadata, observes what it *actually* does, and reports the di
 > produced none.
 > Every report states what was not tested and why. That is the point of the tool.
 
-**Status: early foundation (v0.x).** One check is implemented. Schemas may change before
-1.0. See [What AppSec Framework does not do yet](#what-appsec-framework-does-not-do-yet)
-before relying on it. It has not been evaluated for precision or recall against a corpus
+**Status: early foundation (v0.x).** One check is implemented, now with an authenticated
+control request behind it (M1). Schemas may change before 1.0. See
+[What AppSec Framework does not do yet](#what-appsec-framework-does-not-do-yet) before
+relying on it. It has not been evaluated for precision or recall against a corpus
 of real applications, so no detection-quality claim is made.
 
 ---
@@ -94,6 +95,39 @@ appsec scan http://localhost:3000 --spec ./openapi.json
 appsec scan https://staging.example.com --spec-url https://staging.example.com/openapi.json
 ```
 
+### Identities
+
+Give it a credential and it can compare what an anonymous caller received against what a
+legitimate one receives. That comparison is the only way a finding reaches `confirmed`.
+
+```yaml
+identities:
+  - id: admin
+    label: Administrator
+    authentication:
+      type: bearer                      # or apiKey, with a header
+      credential:
+        env: APPSEC_ADMIN_TOKEN         # or: file: /run/secrets/admin-token
+    liveness:                           # optional, strongly recommended
+      method: GET
+      path: /api/me
+      expectStatus: [200]
+```
+
+```bash
+APPSEC_ADMIN_TOKEN='...' appsec scan http://localhost:3000
+```
+
+**A credential is never written into `appsec.yaml`.** The file has no field that accepts
+one — only a reference to an environment variable or a file — so it stays safe to commit
+and safe to review. There is no `--token` flag either: process listings are readable by
+other users and shell history outlives the run.
+
+The `liveness` probe is an operation *you* nominate, because guessing `/me` or `/whoami`
+would produce a 404 on most applications and a 404 is indistinguishable from an expired
+credential. It is what lets a run notice that a token died halfway through instead of
+reporting the resulting sweep of denials as a clean result.
+
 ### What a run looks like
 
 ```
@@ -133,12 +167,27 @@ confidence asks how sure we are. `HIGH` severity with `LOW` confidence is valid 
 expected. Confidence comes from evidence quality and verification state only — never from
 how many tools agreed.
 
-**A finding is `suspected` until verification succeeds.** A single unauthenticated `200` is
-not proof, so the check runs a ladder of discriminators — catch-all fingerprinting, content
-type, error envelopes carried in `2xx` bodies, cache-hit detection, repetition — and
-records which ones passed. Without configured credentials there is no authenticated control
-request, so nothing can reach `confirmed`, and the report *names that gap* rather than
-rounding up.
+**A finding is `suspected` until verification succeeds.** A single unauthenticated `200`
+is not proof, so the check runs a ladder of discriminators — catch-all fingerprinting,
+content type, error envelopes carried in `2xx` bodies, cache-hit detection, repetition —
+and records which ones passed. Without a configured identity there is no authenticated
+control request, so nothing can reach `confirmed`, and the report *names that gap* rather
+than rounding up.
+
+**A finding is `confirmed` only by a live authenticated control that matches materially.**
+Anonymous 200 plus authenticated 200 is not enough — that rule confirms every
+single-page-app shell and every 200-carrying error envelope. Confirmation requires both
+responses to classify as allowed, the same status, the same content type, the same JSON
+document *shape* (key paths and value types, values ignored so a request id cannot break a
+real match), and no cache hit on the control. Anything else stays `suspected` and names
+the gap. See
+[ADR-0012](docs/adr/0012-authenticated-control-and-material-equivalence.md).
+
+**A broken credential can never produce a clean result.** Inference runs one way: a control
+that succeeds and matches raises a finding; a control that is missing, rejected, expired or
+different only ever leaves it suspected. A finding is raised by an anonymous success and
+never by an authenticated failure, so forgetting to set an environment variable cannot turn
+a vulnerable application green — it produces a blocked identity row and a named gap.
 
 **`404` counts as a denial.** Returning not-found for a resource the caller may not see is
 a legitimate anti-enumeration pattern; treating it as a distinct outcome would report good
@@ -180,7 +229,7 @@ commit `.appsec/`.
 
 Being specific about this is part of the product.
 
-- **No BOLA/IDOR, tenancy, or multi-identity testing.** The single largest class of real
+- **No BOLA/IDOR, tenancy, or cross-identity testing.** The single largest class of real
   API findings. Next milestone; see [the roadmap](docs/roadmap.md).
 - **No engine integrations.** ZAP, Nuclei, Semgrep and Hadrian are designed as optional
   subprocesses ([ADR-0005](docs/adr/0005-external-engines-are-subprocesses.md)) but none is
@@ -189,16 +238,21 @@ Being specific about this is part of the product.
   ([ADR-0002](docs/adr/0002-out-of-process-adapters.md)), not built.
 - **No undocumented-route discovery.** The attack surface comes from the specification, so
   routes absent from it are invisible — not merely untested. Every report says this.
-- **No authentication providers**, so no authenticated control request, so nothing reaches
-  `confirmed`.
+- **Only bearer and header API-key authentication.** No OAuth2 flows, no OIDC, no browser
+  login, no cookie-session establishment, no refresh rotation. Query-string API keys are
+  refused deliberately: a credential in a URL reaches error text, reproduction strings and
+  every intermediary's access log.
+- **One identity at a time.** Multiple identities can be configured, but comparing one
+  against another — BOLA, IDOR, cross-tenant reads — is the next milestone, not this
+  one.
 - **No AI**, no dashboard, no database, no crawler, no injection payloads.
 - **No measured precision or recall.** The evaluation harness proves the check
   distinguishes paired vulnerable and secure fixtures; it does not establish a
   false-positive rate on real applications.
 - **AppSec Framework is fingerprintable, so a hostile target can cloak.** Its user agent,
-  cache buster and baseline paths are identifiable by design, because a scanner that disguises
-  itself is harder to authorize and harder to stop. That is the right trade for assessing
-  your own application, and a real limitation otherwise.
+  cache buster and baseline paths are identifiable by design, because a scanner that
+  disguises itself is harder to authorize and harder to stop. That is the right trade for
+  assessing your own application, and a real limitation otherwise.
 
 ---
 

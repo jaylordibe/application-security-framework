@@ -55,6 +55,40 @@ assessment:
   # unauthenticated requests can lock real accounts.
   excludeAuthEndpoints: true
 
+identities:
+  # A security principal AppSec Framework may act as. An identity is not a
+  # credential: only a reference to where the credential lives is configured
+  # here, so that this file can be committed and reviewed safely.
+  #
+  # With an identity, the declared-auth check can compare an anonymous response
+  # against what a legitimate caller receives, which is the only way a finding
+  # reaches "confirmed". Without one, findings stay "suspected" and say so.
+  #
+  # Supported types are bearer and apiKey. OAuth2, OIDC, browser login and
+  # cookie-session flows are not implemented.
+  []
+  # - id: admin
+  #   label: Administrator
+  #   authentication:
+  #     type: bearer
+  #     credential:
+  #       env: APPSEC_ADMIN_TOKEN     # or: file: /run/secrets/admin-token
+  #   # A safe, authentication-requiring operation used to check that the
+  #   # credential is still valid. Strongly recommended: without it, a token
+  #   # expiring mid-run cannot be detected, and every result that depended on
+  #   # it would silently rest on a dead credential.
+  #   liveness:
+  #     method: GET
+  #     path: /api/me
+  #     expectStatus: [200]
+  #
+  # - id: service
+  #   authentication:
+  #     type: apiKey
+  #     header: X-API-Key            # validated as an HTTP header name
+  #     credential:
+  #       env: APPSEC_SERVICE_KEY
+
 discovery:
   # AppSec Framework derives expectations from the application's own
   # specification. Give it one, or let it probe the usual locations on the

@@ -21,6 +21,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 
+	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/scope"
 )
@@ -41,6 +42,7 @@ type Config struct {
 	Target      Target      `yaml:"target"`
 	Scope       Scope       `yaml:"scope"`
 	Assessment  Assessment  `yaml:"assessment"`
+	Identities  []Identity  `yaml:"identities"`
 	Discovery   Discovery   `yaml:"discovery"`
 	Outcome     Outcome     `yaml:"outcome"`
 	Environment Environment `yaml:"environment"`
@@ -112,6 +114,58 @@ type Assessment struct {
 	// authentication. Sweeping unauthenticated requests across login routes can
 	// trip account lockout on real accounts and poison the rest of the run.
 	ExcludeAuthEndpoints *bool `yaml:"excludeAuthEndpoints"`
+}
+
+// Identity is one security principal AppSec Framework may act as.
+//
+// The credential itself is deliberately absent from this struct. Only a
+// reference to where the material lives is configurable, so that a credential
+// cannot be committed to a repository, reviewed in a pull request, or copied
+// into a CI log by the ordinary act of sharing a configuration file.
+type Identity struct {
+	// ID is a stable, short name used in the ledger and in reports.
+	ID string `yaml:"id"`
+	// Label is a human-readable description.
+	Label string `yaml:"label"`
+	// Authentication says how to authenticate as this identity.
+	Authentication Authentication `yaml:"authentication"`
+	// Liveness configures a canary that establishes whether the identity is
+	// still usable. Optional, and strongly recommended: without one, a
+	// credential expiring mid-run cannot be detected.
+	Liveness *LivenessProbe `yaml:"liveness"`
+}
+
+// Authentication is a supported authentication mechanism and its credential
+// reference.
+type Authentication struct {
+	// Type is bearer or apiKey.
+	Type string `yaml:"type"`
+	// Header is the field name for the apiKey type.
+	Header string `yaml:"header"`
+	// ValuePrefix is prepended to the credential for the apiKey type.
+	ValuePrefix string `yaml:"valuePrefix"`
+	// Credential references where the secret is read from.
+	Credential Credential `yaml:"credential"`
+}
+
+// Credential references a secret without containing one.
+type Credential struct {
+	// Env names an environment variable.
+	Env string `yaml:"env"`
+	// File names a file whose contents are the credential.
+	File string `yaml:"file"`
+}
+
+// LivenessProbe is a safe, authentication-requiring operation used to establish
+// whether an identity still authenticates.
+type LivenessProbe struct {
+	Method string `yaml:"method"`
+	// Path is resolved against target.baseURL and is subject to the scope
+	// policy like every other request.
+	Path string `yaml:"path"`
+	// ExpectStatus lists statuses meaning the identity is still good. Empty
+	// means any 2xx.
+	ExpectStatus []int `yaml:"expectStatus"`
 }
 
 // Discovery configures how the attack surface is learned.
@@ -303,10 +357,50 @@ func (c *Config) Validate() error {
 		problems = append(problems, "output.dir is required")
 	}
 
+	// Identity rules live in the identity package beside the types they
+	// constrain, so that the validation a credential must pass cannot drift
+	// away from the code that resolves it.
+	problems = append(problems, identity.ValidateAll(c.IdentityModels())...)
+
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "\n  - "))
 	}
 	return nil
+}
+
+// IdentityModels maps the configured identities onto the identity package's
+// types.
+//
+// The mapping is explicit rather than a shared struct because the two have
+// different jobs: the config type is the YAML wire format and must keep its
+// tags and its pointer-for-optional fields, while the identity type is the
+// domain model and carries none.
+func (c Config) IdentityModels() []identity.Identity {
+	out := make([]identity.Identity, 0, len(c.Identities))
+	for _, i := range c.Identities {
+		id := identity.Identity{
+			ID:    i.ID,
+			Label: i.Label,
+			Auth: identity.Authentication{
+				Scheme:      identity.Scheme(i.Authentication.Type),
+				Header:      i.Authentication.Header,
+				ValuePrefix: i.Authentication.ValuePrefix,
+				Credential: identity.CredentialSource{
+					Env:  i.Authentication.Credential.Env,
+					File: i.Authentication.Credential.File,
+				},
+			},
+		}
+		if i.Liveness != nil {
+			id.Live = identity.Liveness{
+				Method:       i.Liveness.Method,
+				Path:         i.Liveness.Path,
+				ExpectStatus: i.Liveness.ExpectStatus,
+			}
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // Profile returns the validated profile.

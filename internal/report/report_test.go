@@ -11,6 +11,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/jaylordibe/application-security-framework/internal/engine"
+	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/openapi"
 )
@@ -225,5 +226,118 @@ func TestOutputIsDeterministic(t *testing.T) {
 	}
 	if a.String() != b.String() {
 		t.Fatal("JSON output is not deterministic")
+	}
+}
+
+// The report is the artefact that leaves the machine. Whatever a Status
+// contains, the published DTO must contain no credential-derived value at all —
+// not the value, not its length, not a fingerprint of it.
+func TestIdentityReportingCarriesNoCredentialMaterial(t *testing.T) {
+	const secret = "APPSEC_M1_SECRET_MUST_NEVER_PERSIST_7f91"
+	res := engine.Result{
+		RunID: "r", Target: "http://localhost:3000", Profile: model.ProfileVerification,
+		Surface: engine.Surface{SpecDerived: true},
+		Identities: []identity.Status{{
+			ID:        "admin",
+			Label:     "Administrator",
+			Scheme:    identity.SchemeBearer,
+			Source:    "environment variable APPSEC_ADMIN_TOKEN",
+			Usable:    true,
+			Monitored: true,
+			Liveness:  identity.LivenessGood,
+			LastGood:  time.Unix(1000, 0),
+			Probes:    2,
+		}},
+	}
+	doc := Build(res, "test")
+
+	if len(doc.Identities) != 1 {
+		t.Fatalf("identities = %d, want 1", len(doc.Identities))
+	}
+	got := doc.Identities[0]
+	if got.ID != "admin" || got.Scheme != "bearer" {
+		t.Errorf("identity not published faithfully: %+v", got)
+	}
+	if got.CredentialSource != "environment variable APPSEC_ADMIN_TOKEN" {
+		t.Errorf("credential source = %q; a location is publishable and must be published", got.CredentialSource)
+	}
+	if got.LastGoodAt == "" {
+		t.Error("a confirmed-good canary time was not published")
+	}
+	if got.FirstBadAt != "" {
+		t.Errorf("firstBadAt = %q, want empty; a zero time must not read as an observation", got.FirstBadAt)
+	}
+
+	var jsonOut, sarifOut strings.Builder
+	if err := WriteJSON(&jsonOut, doc); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if err := WriteSARIF(&sarifOut, doc); err != nil {
+		t.Fatalf("sarif: %v", err)
+	}
+	for name, text := range map[string]string{
+		"json":    jsonOut.String(),
+		"sarif":   sarifOut.String(),
+		"summary": Summary(doc),
+	} {
+		if strings.Contains(text, secret) {
+			t.Errorf("the %s output contains credential material", name)
+		}
+	}
+
+	// The identity reaches SARIF too, so a SARIF-only consumer is not told less.
+	if !strings.Contains(sarifOut.String(), `"admin"`) {
+		t.Error("SARIF does not carry the identity, so a SARIF consumer cannot see the limitation")
+	}
+}
+
+// A reader who does not know whether an authenticated baseline existed cannot
+// interpret "no confirmed findings". The statement must always be present and
+// must distinguish the cases.
+func TestAuthenticatedControlStatement(t *testing.T) {
+	tests := []struct {
+		name     string
+		ids      []identity.Status
+		mentions string
+	}{
+		{
+			name:     "none configured",
+			ids:      nil,
+			mentions: "No identity was configured",
+		},
+		{
+			name:     "credential unresolvable",
+			ids:      []identity.Status{{ID: "a", Usable: false}},
+			mentions: "no credential could be resolved",
+		},
+		{
+			name:     "identity rejected mid-run",
+			ids:      []identity.Status{{ID: "a", Usable: true, Monitored: true, Liveness: identity.LivenessBad}},
+			mentions: "rejected by the target",
+		},
+		{
+			name:     "usable but unmonitored",
+			ids:      []identity.Status{{ID: "a", Usable: true, Monitored: false, Liveness: identity.LivenessUnknown}},
+			mentions: "no liveness canary is configured",
+		},
+		{
+			name:     "usable and monitored",
+			ids:      []identity.Status{{ID: "a", Usable: true, Monitored: true, Liveness: identity.LivenessGood}},
+			mentions: "confirmed live by a canary",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := Build(engine.Result{
+				RunID: "r", Surface: engine.Surface{SpecDerived: true}, Identities: tc.ids,
+			}, "test")
+			got := doc.Assurance.AuthenticatedControl
+			if got == "" {
+				t.Fatal("the authenticated-control statement is empty")
+			}
+			if !strings.Contains(got, tc.mentions) {
+				t.Errorf("statement %q does not mention %q", got, tc.mentions)
+			}
+		})
 	}
 }

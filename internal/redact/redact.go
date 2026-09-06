@@ -87,6 +87,16 @@ type Redactor struct {
 	mu sync.RWMutex
 	// secrets maps a secret value to the label reported in its place.
 	secrets map[string]string
+	// extraHeaders holds header names registered at run start because the
+	// operator declared that they carry a credential. They are lowercased.
+	//
+	// This exists so that a bespoke API-key header is redacted by name as well
+	// as by value. Redacting by value alone would leave the header readable if a
+	// target echoed only a prefix of the credential, and blanket-redacting every
+	// unrecognised header would destroy the evidence the report exists to carry.
+	// Registering exactly the headers the operator said are credentials is the
+	// precise middle.
+	extraHeaders map[string]struct{}
 	// fingerprintKey is generated per run and never written to a report, so a
 	// fingerprint cannot be correlated across runs or brute-forced offline
 	// without access to the run directory.
@@ -101,7 +111,40 @@ func New() *Redactor {
 		// degrade to a keyless hash, which would be offline-guessable.
 		panic("redact: cannot generate fingerprint key: " + err.Error())
 	}
-	return &Redactor{secrets: make(map[string]string), fingerprintKey: key}
+	return &Redactor{
+		secrets:        make(map[string]string),
+		extraHeaders:   make(map[string]struct{}),
+		fingerprintKey: key,
+	}
+}
+
+// RegisterSensitiveHeader marks a header name as carrying a credential, so its
+// value is replaced entirely wherever it appears rather than only where it
+// matches a known secret.
+func (r *Redactor) RegisterSensitiveHeader(name string) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.extraHeaders == nil {
+		r.extraHeaders = make(map[string]struct{})
+	}
+	r.extraHeaders[name] = struct{}{}
+}
+
+// sensitiveHeader reports whether a header must have its value replaced, taking
+// both the built-in deny-list and run-registered names into account.
+func (r *Redactor) sensitiveHeader(name string) bool {
+	if isSensitiveHeader(name) {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(name))
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.extraHeaders[lower]
+	return ok
 }
 
 // FingerprintKey returns the per-run key. It is stored alongside a run so that
@@ -191,7 +234,7 @@ func (r *Redactor) Header(h map[string][]string) map[string][]string {
 	}
 	out := make(map[string][]string, len(h))
 	for name, values := range h {
-		if isSensitiveHeader(name) {
+		if r.sensitiveHeader(name) {
 			for _, v := range values {
 				r.learn(name, v)
 			}

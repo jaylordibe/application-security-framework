@@ -3,11 +3,13 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 
 	"github.com/spf13/cobra"
 
+	"github.com/jaylordibe/application-security-framework/internal/config"
 	"github.com/jaylordibe/application-security-framework/internal/store"
 )
 
@@ -23,7 +25,8 @@ type engineTool struct {
 }
 
 func newDoctorCommand(stdout, stderr io.Writer) *cobra.Command {
-	return &cobra.Command{
+	var configPath string
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Report what is available and what each missing piece would unlock",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -37,6 +40,8 @@ func newDoctorCommand(stdout, stderr io.Writer) *cobra.Command {
 			} else {
 				fmt.Fprintf(stdout, "  %-22s %s\n", "file permissions", "NOT enforced on this platform")
 			}
+
+			reportIdentities(stdout, configPath)
 
 			fmt.Fprintln(stdout, "\nOptional external engines (none are bundled; none are required)")
 			tools := []engineTool{
@@ -59,5 +64,52 @@ func newDoctorCommand(stdout, stderr io.Writer) *cobra.Command {
 				"is on your PATH so that a future run can say precisely what it could not use.")
 			return nil
 		},
+	}
+	cmd.Flags().StringVarP(&configPath, "config", "c", "", "path to appsec.yaml (default: ./appsec.yaml if present)")
+	return cmd
+}
+
+// reportIdentities says whether each configured identity's credential can be
+// resolved.
+//
+// It reports availability and location only. A credential value is never
+// printed, and neither is its length or a fingerprint of it: `doctor` output is
+// pasted into issues and CI logs, which is exactly where a secret must not be.
+//
+// This deliberately does not contact the target. Checking whether a credential
+// is *accepted* is the liveness canary's job during a run; doing it here would
+// turn a local diagnostic into an unannounced authenticated request.
+func reportIdentities(stdout io.Writer, configPath string) {
+	path := configPath
+	if path == "" {
+		if _, err := os.Stat("appsec.yaml"); err != nil {
+			return
+		}
+		path = "appsec.yaml"
+	}
+
+	fmt.Fprintln(stdout, "\nIdentities (from "+path+")")
+	cfg, err := config.Load(path)
+	if err != nil {
+		fmt.Fprintf(stdout, "  %-22s %s\n", "configuration", "could not be read; run a scan for the full error")
+		return
+	}
+	ids := cfg.IdentityModels()
+	if len(ids) == 0 {
+		fmt.Fprintf(stdout, "  %-22s %s\n", "none configured",
+			"no authenticated control request is possible, so no finding can reach confirmed")
+		return
+	}
+	for _, id := range ids {
+		label := id.ID
+		status := "credential source configured"
+		if _, rerr := id.Auth.Credential.Resolve(); rerr != nil {
+			status = "credential unavailable: " + rerr.Error()
+		}
+		fmt.Fprintf(stdout, "  %-22s %s (%s)\n", label, status, id.Auth.Credential.Describe())
+		if !id.Live.Configured() {
+			fmt.Fprintf(stdout, "  %-22s %s\n", "",
+				"no liveness canary; an expiry during a run could not be detected")
+		}
 	}
 }

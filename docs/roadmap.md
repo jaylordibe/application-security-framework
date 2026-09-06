@@ -13,7 +13,7 @@ disappear.** A milestone that adds surface without removing a limitation is defe
 
 Delivered in this repository, with tests.
 
-Research and justification; threat model; architecture and eleven ADRs; the domain model;
+Research and justification; threat model; architecture and twelve ADRs; the domain model;
 scope enforcement; the HTTP client; capture-time redaction; OpenAPI ingestion with oracle
 grading; outcome classification; one check with a verification ladder; the coverage
 ledger; JSON and SARIF reporting; the run store; the offline evaluation harness; CI.
@@ -24,25 +24,48 @@ every operation it did not test.
 
 ---
 
-## M1 — Identities and an authenticated control request
+## Done — M1: Identities and an authenticated control request
 
-**Removes the limitation:** no finding can currently reach `confirmed`, because there is
-no authenticated baseline to compare an anonymous response against.
+**Removed the limitation:** no finding could reach `confirmed`, because there was no
+authenticated baseline to compare an anonymous response against.
 
-| Task | Acceptance criteria |
-|---|---|
-| Identity model and credential loading | Credentials come from environment variables or a secrets file, never from `appsec.yaml` in plaintext. Registered with the redactor before first use. |
-| Bearer and API-key providers | A configured identity can issue an authenticated request; failure to authenticate is `blocked{authentication_failed}`, never a silent anonymous run. |
-| Authenticated control request in the check | A finding reaches `confirmed` only when the anonymous and authenticated responses are materially equivalent; otherwise it stays `suspected` and says why. |
-| Identity liveness canary | A known-authenticated operation is probed periodically. On credential expiry, every result since the last good canary is invalidated and marked blocked — otherwise a token expiring mid-run produces a sweep of false "denied" results that reads as a clean report. |
+| Task | Acceptance criteria | Delivered |
+|---|---|---|
+| Identity model and credential loading | Credentials come from environment variables or a secrets file, never from `appsec.yaml` in plaintext. Registered with the redactor before first use. | ✅ `internal/identity`. An identity holds a *reference*; the configuration schema has no field that accepts a value, and the absence is asserted by test. Both `env` and `file` sources. |
+| Bearer and API-key providers | A configured identity can issue an authenticated request; failure to authenticate is `blocked{authentication_failed}`, never a silent anonymous run. | ✅ Bearer and header API-key. Header names are validated as RFC 9110 field names and framing headers are refused. Query-string API keys deferred deliberately (ADR-0012, T-16). |
+| Authenticated control request in the check | A finding reaches `confirmed` only when the anonymous and authenticated responses are materially equivalent; otherwise it stays `suspected` and says why. | ✅ Material equivalence is a conjunction of outcome, status, content type, JSON document shape and cache state ([ADR-0012](adr/0012-authenticated-control-and-material-equivalence.md)). |
+| Identity liveness canary | A known-authenticated operation is probed periodically. On credential expiry, every result since the last good canary is invalidated and marked blocked — otherwise a token expiring mid-run produces a sweep of false "denied" results that reads as a clean report. | ✅ with two deliberate refinements, below. |
+
+**Two refinements to the canary criterion, stated because they differ from what was
+written above.**
+
+*Probing is event-driven, not periodic.* The canary runs at the start of a run, at the end,
+and whenever an authenticated request returns something consistent with an invalid
+credential. A timer probes when nothing has happened and stays silent when everything has;
+probing at the moment a credential first looks wrong finds the expiry with the smallest
+uncertainty window, which is exactly the interval that must then be distrusted. Nothing is
+lost, because a control request that *succeeds* is itself direct evidence the credential was
+live at that moment — the only case needing detection is a control that fails, and that is
+precisely the trigger.
+
+*Invalidation targets results that used the identity, not every result.* A row whose check
+never issued a control request does not depend on the credential, so withdrawing it would
+overstate the damage. Rows that did use a control inside `(lastGood, firstBad]` become
+`blocked{authentication_failed}`, and any finding they corroborated drops to `suspected` —
+but the finding is **kept**, because the anonymous observation behind it never involved the
+credential and deleting it would let an expired token hide a real bypass.
 
 **Security considerations:** credentials never enter a report, a log line or the run
-directory; authentication endpoints stay excluded from anonymous sweeps.
-**Non-goals:** OAuth2 flows, browser login, custom multi-step authentication.
+directory — asserted end-to-end against a target that reflects the credential in a header,
+a body and a `Location`, by searching every byte of the run directory. Redirects are never
+followed, so a credential cannot be replayed off-origin. Authenticated traffic uses the same
+scope-enforced client as anonymous traffic. See threat model T-16.
+**Non-goals delivered as non-goals:** OAuth2 flows, OIDC, browser login, cookie-session
+establishment, refresh rotation, custom multi-step authentication.
 
 ---
 
-## M2 — Two identities and one owned resource: BOLA
+## Next — M2: Two identities and one owned resource: BOLA
 
 **Removes the limitation:** the largest class of real API findings is invisible today.
 

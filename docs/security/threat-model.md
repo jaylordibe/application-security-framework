@@ -385,6 +385,97 @@ most likely to hurt a real user, and the one this project was created to fix.
 
 ---
 
+### T-16 Operator credentials supplied to authenticate as an identity
+
+M1 introduced the first credentials AppSec Framework holds on the operator's behalf. These
+are worse than the credentials it observes: an observed session cookie belongs to a test
+account created for the run, while a configured credential is one the operator chose to
+hand over, often with real privilege.
+
+**Configuration cannot contain a credential at all.**
+
+- `appsec.yaml` has no field that accepts a credential value. Only a *reference* —
+  `credential.env` or `credential.file` — is accepted, and strict decoding rejects anything
+  else, so a `token:` key added by a hopeful contributor is a loud parse error rather than a
+  committed secret. **TESTED** (`config.TestConfigurationCannotCarryACredentialValue`,
+  `TestIdentityConfigurationIsValidated`).
+- The same absence is asserted against the JSON Schema, so editor completion never offers a
+  place to type one. **TESTED** (`config.TestSchemaAndParserAgreeOnRejection`).
+- No CLI flag accepts a secret. Process listings are world-readable on most systems and
+  shell history outlives the run. **TESTED** (`cli.TestNoFlagAcceptsARawSecret`).
+
+**A resolved credential cannot reach output.**
+
+- A credential lives in a `Secret`, whose `String`, `GoString` and `MarshalJSON` render a
+  placeholder. Reading the value requires `Expose`, which is called from one place. This
+  closes `%v`, `%+v`, `%#v`, `%s`, structured logging, error formatting and whole-struct
+  JSON marshalling in a single move, rather than relying on every future call site to
+  remember. **TESTED** (`identity.TestSecretNeverRendersItsValue`,
+  `TestSecretRefusesToUnmarshal`).
+- Resolution failures name the *location* and never the contents, so the error reporting a
+  misconfigured credential does not become the leak. **TESTED**
+  (`identity.TestResolveErrorsNeverContainTheCredential`).
+- Credentials are registered with the redactor **before the first request is possible**,
+  along with their on-the-wire form, so a target that reflects `Bearer <token>` in a body
+  cannot defeat redaction by including the scheme. **TESTED**
+  (`identity.TestResolveRegistersCredentialsWithTheRedactor`).
+- A bespoke API-key header is registered by **name** as well as by value, so a target
+  echoing only part of the credential cannot leave the rest readable. Blanket-redacting
+  every unrecognised header would destroy the evidence the report exists to carry, so
+  exactly the headers the operator declared as credentials are registered. **TESTED**
+  (`identity.TestResolveRegistersCustomCredentialHeader`).
+- The end-to-end guarantee is asserted against a hostile fixture that reflects the
+  credential in a header, a body and a `Location`, after which every byte of the run
+  directory — evidence, JSON, SARIF, metadata — is searched for it. Unit-testing the
+  redactor proves the function works, not that every writer goes through it. **TESTED**
+  (`evals.TestM1_CredentialNeverReachesDisk`).
+- `doctor` reports whether a credential is *available* and never what it is, because its
+  output is pasted into issues and CI logs. **TESTED**
+  (`cli.TestDoctorReportsIdentitiesWithoutValues`).
+
+**A credential cannot leave the authorized origin.**
+
+- Redirects are never followed, so a `Location` chosen by the target cannot replay a
+  credential anywhere. **TESTED** (`evals.TestM1_MaliciousRedirectNeverForwardsTheCredential`,
+  which asserts that the off-origin host received *zero* requests).
+- Authenticated requests traverse the same client as anonymous ones, so the URL gate and
+  the dial-time address gate of T-01 — including the DNS-rebinding protection and the cloud
+  metadata denial — apply unchanged. There is no authenticated code path that bypasses
+  scope. **TESTED** (`evals.TestM1_OffOriginRedirectTargetIsOutOfScope`).
+- Query-string API keys are **deliberately not supported**. A credential in a URL reaches
+  the cache-busting logic, reproduction strings, transport error text and every
+  intermediary's access log. The redactor covers known parameter names, but the exposure is
+  broad and the benefit small, so the mechanism is refused rather than mitigated.
+
+**Identities cannot contaminate one another.**
+
+- `Control.Headers` allocates a fresh map per call and the HTTP client holds no per-request
+  state, so two identities executing concurrently cannot present each other's credential.
+  **TESTED** (`identity.TestConcurrentIdentitiesDoNotContaminate` asserts on the wire that
+  every request carried the right token, `TestHeadersAreNotShared`), and the suite runs
+  under `-race`.
+- The check's anonymous probes and baseline probes carry no credential, which is what makes
+  the anonymous/authenticated comparison meaningful at all. **TESTED**
+  (`evals.TestM1_AnonymousProbesCarryNoCredential`).
+
+**Residual risk, stated rather than mitigated.**
+
+- A credential is a Go string in process memory for the run's duration. It is not locked,
+  not zeroed on exit, and would appear in a core dump. Fixing this properly needs
+  mlock-style handling that Go does not offer portably.
+- A Go panic prints a goroutine traceback. Struct fields are rendered as words rather than
+  as string contents, so a credential is not expected to appear, but this is a property of
+  the runtime rather than a control this project enforces.
+- Environment variables are readable by other processes of the same user, and on Linux via
+  `/proc/<pid>/environ`. This is the standard secret-delivery mechanism for CI and is
+  accepted as such; the file source exists for operators who prefer a mounted secret.
+- A credential file's permissions are the operator's to set. A file readable by other users
+  produces a **warning** rather than a refusal, because refusing to run because a CI system
+  mounted a secret group-readable would be an obstruction.
+- Future subprocess engines (M4) must be given a **minimal explicit environment**, or every
+  configured credential would be inherited by a third-party binary. This is already recorded
+  as an M4 acceptance criterion and is restated here because M1 is what makes it dangerous.
+
 ## 3. Residual risk accepted at this stage
 
 Stated plainly rather than left for a reader to discover.

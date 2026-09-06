@@ -77,6 +77,7 @@ implementation genuinely exists or is imminent.
 | `internal/scope` | the authorization boundary for every request | ✅ |
 | `internal/httpx` | the only way to reach the network | ✅ |
 | `internal/redact` | secret redaction at capture time (zero-dependency leaf) | ✅ |
+| `internal/identity` | principals, credential sources, authenticated controls, liveness | ✅ |
 | `internal/openapi` | specification ingestion → operations + declared expectations | ✅ |
 | `internal/outcome` | response → access outcome classification | ✅ |
 | `internal/check` | check implementations | ✅ |
@@ -177,7 +178,100 @@ alone, and never as a claim about security.
 
 ---
 
-## 8. Failure semantics
+## 8. Identities and the authenticated control (M1)
+
+### The distinction the design turns on
+
+An **identity** is a security principal: a stable id, a label, and a reference to how to
+authenticate as it. **Authentication material** is the credential. They are separate types
+with separate lifetimes and separate rules, and conflating them is the mistake this design
+exists to avoid — an identity id belongs in every report, and a credential belongs in none.
+
+```
+Identity            (id, label, scheme, credential reference, optional canary)
+   ↓  resolved once, at run start
+CredentialSource    (env or file — never a value in appsec.yaml)
+   ↓
+Secret              (String/GoString/MarshalJSON render a placeholder; Expose is the
+                     single deliberate reader)
+   ↓  registered with the redactor before the first request is possible
+Control             (issues authenticated requests, tracks liveness)
+   ↓  scope-enforced client, shared with anonymous traffic
+Authenticated control request
+   ↓
+Material-equivalence comparison against the anonymous response
+   ↓
+confirmed, or suspected with the gap named
+```
+
+### Verification semantics
+
+A finding rises to `confirmed` only when an authenticated control request **succeeded** and
+its response was **materially equivalent** to the anonymous one. Material equivalence is a
+conjunction: both classify as `allowed`, identical status, identical normalised content
+type, identical JSON document shape (sorted key paths and value types, array indices
+collapsed, values ignored), and no cache-hit indicator on the control.
+
+Shape rather than bytes because real payloads carry volatile fields; shape rather than
+status because status alone is what an SPA shell and a soft error envelope defeat.
+Non-JSON bodies are unmodelled and never equivalent. Full reasoning in
+[ADR-0012](adr/0012-authenticated-control-and-material-equivalence.md).
+
+**Inference runs one way.** A control that succeeds and matches raises a finding. A control
+that is absent, unusable, rejected, erroring or different only ever leaves it suspected.
+There is no branch in which an authentication failure makes an operation look protected,
+because a finding is raised by an anonymous success and never by an authenticated failure.
+That asymmetry is what makes a missing credential incapable of producing a clean result.
+
+### Liveness and temporal validity
+
+The canary is an operation the **operator supplies**. Probing `/me` or `/whoami` on the
+assumption they exist yields a 404 on most applications, which is indistinguishable from an
+expired credential — the canary would then declare the identity dead and block the run.
+
+Three states, because two would force a lie: `unknown` (no canary, or none has run yet),
+`good`, `bad`. Unknown is not a synonym for good.
+
+The canary runs at the start of a run, at the end, and whenever an authenticated request
+returns something consistent with an invalid credential. That last trigger is event-driven
+rather than periodic: a timer probes when nothing has happened and stays silent when
+everything has, whereas probing at the moment a credential first looks wrong finds the
+expiry with the smallest possible uncertainty window.
+
+A canary observes an expiry when it next runs, not when it happens. So `(lastGood,
+firstBad]` is a window in which validity is genuinely unknown, and work corroborated by a
+control issued inside it is re-scored:
+
+| | |
+|---|---|
+| ledger row | `blocked{authentication_failed}`, with the window stated |
+| confirmed finding | demoted to `suspected`, corroboration withdrawn and explained |
+| the finding itself | **kept** — the anonymous observation never involved the credential |
+
+Deleting the finding would let an expired token hide a real bypass, which is the
+false-assurance failure wearing a different hat.
+
+### What the ledger gained
+
+Coverage now has a second dimension, `identity`, carrying one row per configured principal:
+executed when a canary confirmed it, `blocked{missing_identity}` when the credential could
+not be resolved, `blocked{authentication_failed}` when the target rejected it, and
+`untested{no_oracle}` when no canary is configured. Headline counts filter to the
+`operation` dimension, so configuring an identity cannot inflate the number of checks a run
+claims to have executed.
+
+### Not in M1
+
+One identity is used as the control. The type carries a slice so a second can be added
+without reshaping callers, but *choosing between* identities, cross-identity probes, owned
+resources and BOLA are M2. OAuth2, OIDC, browser login, cookie-session establishment and
+refresh rotation are not implemented; each needs multi-step state, and a half-implemented
+login flow that silently falls back to anonymous is exactly the false assurance this
+project exists to prevent.
+
+---
+
+## 9. Failure semantics
 
 - An engine crash is an engine crash. It becomes a blocked coverage entry and a recorded
   tool failure — never an absence of findings.
@@ -187,7 +281,7 @@ alone, and never as a claim about security.
 
 ---
 
-## 9. What is intentionally missing
+## 10. What is intentionally missing
 
 Discovery beyond specification ingestion; any external engine integration; identity and
 authentication providers; the adversarial authorization engine; tenancy; workflows;

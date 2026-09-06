@@ -20,6 +20,7 @@ import (
 	"github.com/jaylordibe/application-security-framework/internal/config"
 	"github.com/jaylordibe/application-security-framework/internal/engine"
 	"github.com/jaylordibe/application-security-framework/internal/httpx"
+	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/openapi"
 	"github.com/jaylordibe/application-security-framework/internal/outcome"
@@ -203,6 +204,22 @@ func runScan(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) e
 		return fail(ExitInternal, "%v", err)
 	}
 
+	// Identities are resolved before any request is possible, so that every
+	// credential is registered with the redactor before the first exchange can
+	// be captured. Resolution never fails the run: an identity whose credential
+	// is missing becomes a blocked ledger row, which is strictly more useful
+	// than an error, and far more useful than proceeding anonymously in silence.
+	identities := identity.Resolve(cfg.IdentityModels(), cfg.Target.BaseURL, client, red)
+	for _, st := range identities.Statuses() {
+		if !st.Usable {
+			fmt.Fprintf(stderr, "appsec: identity %s: credential unavailable from %s (%s); "+
+				"no authenticated control request will be made\n", st.ID, st.Source, st.Problem)
+		}
+		for _, w := range st.Warnings {
+			fmt.Fprintf(stderr, "appsec: identity %s: warning: %s\n", st.ID, w)
+		}
+	}
+
 	checks := []engine.Check{
 		check.AuthRequired{
 			Client: client,
@@ -212,6 +229,8 @@ func runScan(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) e
 				NotFoundCodes:    cfg.Outcome.NotFoundCodes,
 			},
 			BaselineProbes: 2,
+			Control:        identities.Primary(),
+			Now:            now,
 		},
 	}
 
@@ -229,6 +248,7 @@ func runScan(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) e
 		ExcludeAuthEndpoints: cfg.ShouldExcludeAuthEndpoints(),
 		Concurrency:          cfg.Assessment.Concurrency,
 		RequestsPerSecond:    cfg.Assessment.RequestsPerSecond,
+		Identities:           identities,
 		Now:                  now,
 		EvidenceSink:         run.PutEvidence,
 	})

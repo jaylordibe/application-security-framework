@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -159,5 +160,189 @@ func TestMalformedYAMLProducesAReadableError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "test.yaml") {
 		t.Errorf("error does not name the file: %v", err)
+	}
+}
+
+// Identity configuration is where a credential could most easily be committed
+// by accident, so every rejection here is a guard rail rather than a nicety.
+func TestIdentityConfigurationIsValidated(t *testing.T) {
+	const head = "apiVersion: appsec/v1alpha1\ntarget:\n  baseURL: http://localhost:3000\n"
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr string
+	}{
+		{
+			name: "valid bearer identity",
+			yaml: head + `identities:
+  - id: admin
+    label: Administrator
+    authentication:
+      type: bearer
+      credential:
+        env: APPSEC_ADMIN_TOKEN
+`,
+		},
+		{
+			name: "valid api key identity with a canary",
+			yaml: head + `identities:
+  - id: service
+    authentication:
+      type: apiKey
+      header: X-API-Key
+      valuePrefix: "Token "
+      credential:
+        file: /run/secrets/key
+    liveness:
+      method: GET
+      path: /api/me
+      expectStatus: [200]
+`,
+		},
+		{
+			name: "duplicate ids",
+			yaml: head + `identities:
+  - id: admin
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+  - id: admin
+    authentication:
+      type: bearer
+      credential: {env: B_TOKEN}
+`,
+			wantErr: "duplicates",
+		},
+		{
+			name: "reserved id",
+			yaml: head + `identities:
+  - id: anonymous
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+`,
+			wantErr: "reserved",
+		},
+		{
+			name: "unsupported scheme",
+			yaml: head + `identities:
+  - id: admin
+    authentication:
+      type: oauth2
+      credential: {env: A_TOKEN}
+`,
+			wantErr: "not one of bearer, apiKey",
+		},
+		{
+			name: "api key without a header",
+			yaml: head + `identities:
+  - id: admin
+    authentication:
+      type: apiKey
+      credential: {env: A_TOKEN}
+`,
+			wantErr: "header is required",
+		},
+		{
+			name: "header name with a colon",
+			yaml: head + `identities:
+  - id: admin
+    authentication:
+      type: apiKey
+      header: "X-Key: injected"
+      credential: {env: A_TOKEN}
+`,
+			wantErr: "not a valid HTTP header name",
+		},
+		{
+			name: "no credential source",
+			yaml: head + `identities:
+  - id: admin
+    authentication:
+      type: bearer
+      credential: {}
+`,
+			wantErr: "one of env or file is required",
+		},
+		{
+			name: "both credential sources",
+			yaml: head + `identities:
+  - id: admin
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN, file: /tmp/t}
+`,
+			wantErr: "exactly one of env or file",
+		},
+		{
+			name: "a literal credential value is not a field at all",
+			yaml: head + `identities:
+  - id: admin
+    authentication:
+      type: bearer
+      token: "supersecret"
+      credential: {env: A_TOKEN}
+`,
+			wantErr: "unknown field",
+		},
+		{
+			name: "unsafe canary method",
+			yaml: head + `identities:
+  - id: admin
+    authentication:
+      type: bearer
+      credential: {env: A_TOKEN}
+    liveness:
+      method: DELETE
+      path: /api/me
+`,
+			wantErr: "must be a safe method",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parse(t, tc.yaml)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("valid configuration rejected: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected an error containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want it to mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The configuration schema has no field that accepts a credential value. This
+// asserts the absence rather than trusting it, because "there is no way to write
+// a secret here" is the property the whole credential design rests on.
+func TestConfigurationCannotCarryACredentialValue(t *testing.T) {
+	cfg, err := parse(t, "apiVersion: appsec/v1alpha1\ntarget:\n  baseURL: http://localhost:3000\n"+
+		`identities:
+  - id: admin
+    authentication:
+      type: bearer
+      credential:
+        env: APPSEC_ADMIN_TOKEN
+`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	ids := cfg.IdentityModels()
+	if len(ids) != 1 {
+		t.Fatalf("identities = %d, want 1", len(ids))
+	}
+	if ids[0].Auth.Credential.Env != "APPSEC_ADMIN_TOKEN" {
+		t.Errorf("credential reference lost in mapping: %+v", ids[0].Auth.Credential)
+	}
+	// The mapped identity carries a reference, never material.
+	rendered := fmt.Sprintf("%+v", ids[0])
+	if strings.Contains(rendered, "supersecret") {
+		t.Error("an identity rendered credential material")
 	}
 }

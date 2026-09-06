@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jaylordibe/application-security-framework/internal/check"
+	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/openapi"
 )
@@ -77,6 +78,10 @@ type Options struct {
 	ExcludeAuthEndpoints bool
 	Concurrency          int
 	RequestsPerSecond    float64
+	// Identities are the configured principals and their authenticated
+	// controls. Nil means none is configured, in which case the run behaves
+	// exactly as it did before identities existed.
+	Identities *identity.Set
 	// Now supplies the clock, injected so runs are reproducible.
 	Now func() time.Time
 	// EvidenceSink persists a captured exchange and returns a reference to it.
@@ -110,24 +115,42 @@ type Result struct {
 	// ClassesNotAssessed names weakness classes no check covered. Without this,
 	// a report of "no findings" implies far more than it should.
 	ClassesNotAssessed []string
+	// Identities records what was known about each configured identity. It
+	// carries no credential, no credential length and no fingerprint.
+	Identities []identity.Status
 }
 
-// ExecutedCount returns how many ledger entries actually ran.
+// DimensionOperation is the ledger dimension for assessment work against one
+// operation.
+const DimensionOperation = "operation"
+
+// DimensionIdentity is the ledger dimension for whether a configured identity
+// could be used at all.
+//
+// Identity rows are ledger material rather than a report footnote: "could this
+// identity authenticate?" is a unit of intended work that can be blocked, and a
+// run in which it was blocked has tested less than a run in which it was not.
+const DimensionIdentity = "identity"
+
+// ExecutedCount returns how many operation checks actually ran.
+//
+// Only the operation dimension is counted. An identity row records whether a
+// credential worked, which is a precondition for assessment rather than an
+// instance of it; counting one would let configuring an identity inflate the
+// number of checks a run claims to have executed.
 func (r Result) ExecutedCount() int {
-	n := 0
-	for _, e := range r.Coverage {
-		if e.Disposition == model.DispositionExecuted {
-			n++
-		}
-	}
-	return n
+	return r.countDisposition(model.DispositionExecuted)
 }
 
-// BlockedCount returns how many ledger entries were blocked.
+// BlockedCount returns how many operation checks were blocked.
 func (r Result) BlockedCount() int {
+	return r.countDisposition(model.DispositionBlocked)
+}
+
+func (r Result) countDisposition(d model.Disposition) int {
 	n := 0
 	for _, e := range r.Coverage {
-		if e.Disposition == model.DispositionBlocked {
+		if e.Dimension == DimensionOperation && e.Disposition == d {
 			n++
 		}
 	}
@@ -182,6 +205,15 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	var findingsMu sync.Mutex
 	var findings []model.Finding
 
+	// Establish whether each configured identity can authenticate, before any
+	// assessment work depends on it.
+	//
+	// Doing this first matters. An identity that is already dead would otherwise
+	// be discovered one failed control at a time, and every one of those
+	// failures would be indistinguishable from an application that is correctly
+	// refusing access.
+	probeIdentities(ctx, opts.Identities)
+
 	excluded := map[string]bool{}
 	for _, id := range opts.ExcludeOperations {
 		excluded[id] = true
@@ -200,7 +232,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		for _, ck := range opts.Checks {
 			meta := ck.Metadata()
 			base := model.CoverageEntry{
-				Dimension:  "operation",
+				Dimension:  DimensionOperation,
 				Subject:    op.ID,
 				CheckID:    meta.ID,
 				IdentityID: model.AnonymousIdentity().ID,
@@ -248,6 +280,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	}
 
 	// Execution.
+	controls := &controlLog{}
 	sem := make(chan struct{}, opts.Concurrency)
 	var wg sync.WaitGroup
 	var failuresMu sync.Mutex
@@ -260,7 +293,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			// exists to prevent — a shorter run would simply look cleaner.
 			for _, remaining := range jobs[i:] {
 				lg.add(model.CoverageEntry{
-					Dimension:   "operation",
+					Dimension:   DimensionOperation,
 					Subject:     remaining.op.ID,
 					CheckID:     remaining.ck.Metadata().ID,
 					IdentityID:  model.AnonymousIdentity().ID,
@@ -280,6 +313,15 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			out := j.ck.Run(ctx, j.op)
 			meta := j.ck.Metadata()
 
+			if out.ControlIdentityID != "" {
+				controls.record(controlUse{
+					subject:    j.op.ID,
+					checkID:    meta.ID,
+					identityID: out.ControlIdentityID,
+					at:         out.ControlAt,
+				})
+			}
+
 			// Persist the evidence first, so both the ledger row and any finding
 			// can reference it rather than embedding copies.
 			refs, sinkErrs := storeExchanges(opts.EvidenceSink, out.Exchanges)
@@ -290,7 +332,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 			}
 
 			lg.add(model.CoverageEntry{
-				Dimension:    "operation",
+				Dimension:    DimensionOperation,
 				Subject:      j.op.ID,
 				CheckID:      meta.ID,
 				IdentityID:   model.AnonymousIdentity().ID,
@@ -320,8 +362,19 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	wg.Wait()
 
+	// Probe each identity again now that the work is done.
+	//
+	// A credential that expired mid-run is only ever observed by a later probe:
+	// nothing announces an expiry at the moment it happens. The closing probe
+	// bounds the uncertainty window at the end of the run, and any control that
+	// ran inside that window is re-scored below.
+	probeIdentities(ctx, opts.Identities)
+
 	res.Coverage = lg.entries
 	res.Findings = findings
+	res.Identities = opts.Identities.Statuses()
+	res.Coverage = append(res.Coverage, identityCoverage(res.Identities)...)
+	invalidateExpiredControls(&res, controls.snapshot(), res.Identities)
 	for f := range failures {
 		res.ToolFailures = append(res.ToolFailures, f)
 	}
@@ -434,3 +487,196 @@ func classesNotAssessed(checks []Check) []string {
 // (baseline probes, the primary request, a repeat, a credential probe), so the
 // configured rate was exceeded by roughly that factor — and getting rate limited
 // is precisely how an assessment turns into a falsely clean report.
+
+// controlUse records that one ledger row's result depended on an authenticated
+// control request issued by a named identity at a known time.
+type controlUse struct {
+	subject    string
+	checkID    string
+	identityID string
+	at         time.Time
+}
+
+// controlLog accumulates control usage from concurrent checks.
+type controlLog struct {
+	mu   sync.Mutex
+	uses []controlUse
+}
+
+func (c *controlLog) record(u controlUse) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.uses = append(c.uses, u)
+}
+
+func (c *controlLog) snapshot() []controlUse {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]controlUse, len(c.uses))
+	copy(out, c.uses)
+	return out
+}
+
+// probeIdentities runs each identity's liveness canary.
+//
+// A probe is best-effort by design: an identity with no canary configured
+// cannot be probed, and a transport failure leaves the previous knowledge
+// intact rather than declaring the credential dead because the network
+// stuttered. What a probe must never do is turn an unknown into a good.
+func probeIdentities(ctx context.Context, ids *identity.Set) {
+	if ids == nil {
+		return
+	}
+	for _, c := range ids.Controls() {
+		if ctx.Err() != nil {
+			return
+		}
+		c.Probe(ctx)
+	}
+}
+
+// identityCoverage turns each identity's status into a ledger row.
+//
+// This is what makes an authentication limitation visible in the ledger rather
+// than only in a finding's prose. A run whose only identity could not
+// authenticate has verified less than one whose identity could, and the
+// coverage account has to say so.
+func identityCoverage(statuses []identity.Status) []model.CoverageEntry {
+	out := make([]model.CoverageEntry, 0, len(statuses))
+	for _, st := range statuses {
+		e := model.CoverageEntry{
+			Dimension:  DimensionIdentity,
+			Subject:    st.ID,
+			IdentityID: st.ID,
+		}
+		switch {
+		case !st.Usable:
+			e.Disposition = model.DispositionBlocked
+			e.Cause = model.CauseMissingIdentity
+			e.Detail = "the credential could not be resolved from " + st.Source + ": " + st.Problem +
+				". No authenticated control request was possible, so no finding for any operation " +
+				"could be corroborated against a legitimate caller"
+		case st.Liveness == identity.LivenessBad:
+			e.Disposition = model.DispositionBlocked
+			e.Cause = model.CauseAuthenticationFailed
+			e.Detail = "the identity was rejected by the target: " + st.Problem +
+				". Authenticated control requests using it are not trustworthy"
+		case st.Liveness == identity.LivenessGood:
+			e.Disposition = model.DispositionExecuted
+			e.Detail = "the liveness canary confirmed this identity authenticates successfully"
+		case !st.Monitored:
+			e.Disposition = model.DispositionUntested
+			e.Cause = model.CauseNoOracle
+			e.Detail = "no liveness canary is configured for this identity, so an expiry during the " +
+				"run could not be detected. Set identities[].liveness to a safe, " +
+				"authentication-requiring operation to close this gap"
+		default:
+			e.Disposition = model.DispositionBlocked
+			e.Cause = model.CauseAuthenticationFailed
+			e.Detail = "the liveness canary did not complete, so it is not known whether this " +
+				"identity can authenticate"
+			if st.Problem != "" {
+				e.Detail += ": " + st.Problem
+			}
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// invalidateExpiredControls re-scores work that depended on an identity later
+// found to be invalid.
+//
+// A liveness canary observes an expiry when it next runs, not when it happens,
+// so the interval between the last good probe and the first bad one is a window
+// in which the credential's validity is genuinely unknown. Anything corroborated
+// by a control request issued inside that window is therefore corroborated by
+// something that may already have been dead.
+//
+// Two things happen to such work, and the asymmetry is deliberate:
+//
+//   - The ledger row becomes blocked{authentication_failed}. The check's result
+//     rested on the control, and a result resting on an untrusted control has
+//     not established what it claims.
+//   - A confirmed finding is demoted to suspected rather than discarded. The
+//     anonymous observation behind it did not involve the credential at all, so
+//     deleting the finding would hide a real unauthenticated success. Only the
+//     corroboration is withdrawn.
+//
+// The one thing that must never happen is the reverse: an expired credential
+// making an operation look protected. That cannot arise here because a finding
+// is only ever raised by an anonymous success, never by an authenticated
+// failure.
+func invalidateExpiredControls(res *Result, uses []controlUse, statuses []identity.Status) {
+	windows := make(map[string]identity.Status, len(statuses))
+	for _, st := range statuses {
+		if _, _, ok := st.UncertaintyWindow(); ok {
+			windows[st.ID] = st
+		}
+	}
+	if len(windows) == 0 || len(uses) == 0 {
+		return
+	}
+
+	type key struct{ subject, checkID string }
+	affected := make(map[key]identity.Status)
+	for _, u := range uses {
+		st, bad := windows[u.identityID]
+		if !bad {
+			continue
+		}
+		lastGood, _, _ := st.UncertaintyWindow()
+		// A control that completed at or before the last good canary is backed
+		// by a credential that was confirmed working afterwards.
+		if !u.at.IsZero() && !lastGood.IsZero() && !u.at.After(lastGood) {
+			continue
+		}
+		affected[key{u.subject, u.checkID}] = st
+	}
+	if len(affected) == 0 {
+		return
+	}
+
+	for i := range res.Coverage {
+		e := &res.Coverage[i]
+		if e.Dimension != DimensionOperation {
+			continue
+		}
+		st, hit := affected[key{e.Subject, e.CheckID}]
+		if !hit {
+			continue
+		}
+		e.Disposition = model.DispositionBlocked
+		e.Cause = model.CauseAuthenticationFailed
+		e.Detail = e.Detail + ". This result is withdrawn: identity " + st.ID +
+			" was found invalid at " + st.FirstBad.UTC().Format(time.RFC3339) +
+			", and the authenticated control it relied on ran after the last confirmed-good canary at " +
+			lastGoodLabel(st) + ", so the credential may already have expired when it was used"
+	}
+
+	for i := range res.Findings {
+		f := &res.Findings[i]
+		st, hit := affected[key{f.OperationID, f.CheckID}]
+		if !hit {
+			continue
+		}
+		note := "authenticated-control-request: identity " + st.ID + " was found invalid at " +
+			st.FirstBad.UTC().Format(time.RFC3339) + "; the control that corroborated this finding ran " +
+			"after the last confirmed-good canary at " + lastGoodLabel(st) + ", so the corroboration " +
+			"is withdrawn and the finding is reported as suspected"
+		f.Verification.Unavailable = append(f.Verification.Unavailable, note)
+		if f.State == model.StateConfirmed {
+			f.State = model.StateSuspected
+			f.Confidence = model.ConfidenceMedium
+		}
+	}
+}
+
+// lastGoodLabel renders the last confirmed-good time, or says plainly that
+// there was never one.
+func lastGoodLabel(st identity.Status) string {
+	if st.LastGood.IsZero() {
+		return "no point at all — the identity was never confirmed good"
+	}
+	return st.LastGood.UTC().Format(time.RFC3339)
+}

@@ -248,6 +248,12 @@ func WriteSARIF(w io.Writer, doc Document) error {
 				"classesNotAssessed":  doc.ClassesNotAssessed,
 				"coverage":            doc.Coverage,
 				"surfaceCompleteness": doc.Assurance.SurfaceCompleteness,
+				// Identity rows travel here for the same reason coverage does:
+				// SARIF has no vocabulary for "this is what the run could not
+				// establish", and dropping it would let a consumer read a clean
+				// SARIF file as a clean result. The DTO carries no credential.
+				"identities":           doc.Identities,
+				"authenticatedControl": doc.Assurance.AuthenticatedControl,
 			},
 		}},
 	}

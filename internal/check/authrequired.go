@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jaylordibe/application-security-framework/internal/httpx"
+	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 	"github.com/jaylordibe/application-security-framework/internal/outcome"
 )
@@ -32,6 +34,16 @@ type Result struct {
 	Finding *model.Finding
 	// Exchanges are the evidence gathered, already redacted.
 	Exchanges []model.Exchange
+
+	// ControlIdentityID names the identity whose authenticated control request
+	// contributed to this result, and ControlAt is when that request completed.
+	//
+	// The engine needs both to apply temporal validity: if a liveness canary
+	// later reports the identity invalid, every result whose control ran after
+	// the last confirmed-good canary must be re-scored conservatively. A result
+	// that used no control leaves these zero.
+	ControlIdentityID string
+	ControlAt         time.Time
 }
 
 // AuthRequired tests whether an operation whose own specification declares that
@@ -53,6 +65,21 @@ type AuthRequired struct {
 	// BaselineProbes is how many random paths are fetched to fingerprint the
 	// target's catch-all behaviour.
 	BaselineProbes int
+	// Control issues the authenticated control request. Nil means no identity
+	// is configured, in which case the check behaves exactly as it did before
+	// identities existed: it reports a suspected finding and names the missing
+	// control as the reason it could go no further.
+	Control *identity.Control
+	// Now supplies the clock, injected so runs are reproducible.
+	Now func() time.Time
+}
+
+// now returns the injected clock or the real one.
+func (c AuthRequired) now() time.Time {
+	if c.Now != nil {
+		return c.Now()
+	}
+	return time.Now()
 }
 
 // Metadata describes the check.
@@ -306,6 +333,20 @@ func (c AuthRequired) Run(ctx context.Context, op model.Operation) Result {
 		}
 	}
 
+	// Discriminator: the authenticated control request.
+	//
+	// This is the step that separates "an unauthenticated request got a 200"
+	// from "an unauthenticated request received the protected resource". Until
+	// M1 there was no identity to ask, so the check could only ever suspect.
+	//
+	// Note the direction of the inference. A control that succeeds and matches
+	// raises the finding; a control that fails, is missing, or disagrees only
+	// ever leaves it suspected. There is deliberately no path by which a failed
+	// authentication makes an operation look protected — a dead credential must
+	// never be able to manufacture a clean result.
+	ctrl := c.authenticatedControl(ctx, op, primary.Response, &exchanges)
+	steps = append(steps, ctrl.step)
+
 	title := "Operation declared as requiring authentication is served without credentials"
 	expected := "the specification declares this operation requires authentication, so an " +
 		"unauthenticated request should be refused"
@@ -320,24 +361,41 @@ func (c AuthRequired) Run(ctx context.Context, op model.Operation) Result {
 		actualDetail += "; a malformed credential was also accepted, so no credential is required"
 	}
 
+	// The finding rises only when the authenticated control established that the
+	// anonymous caller received the same substance a legitimate caller receives.
+	state := model.StateSuspected
+	confidence := model.ConfidenceMedium
+	result := "the operation served an unauthenticated request and no discriminator explained it away"
+	strategy := "unauthenticated-probe-with-catch-all-cache-and-repetition-discriminators"
+	if ctrl.equivalent {
+		state = model.StateConfirmed
+		confidence = model.ConfidenceHigh
+		result = "an unauthenticated request received a response materially equivalent to the one an " +
+			"authenticated identity received, so the declared authentication control is not enforced"
+		strategy = "unauthenticated-probe-with-catch-all-cache-and-repetition-discriminators-" +
+			"and-an-authenticated-control-request"
+		actualDetail += "; an authenticated control request as identity " + ctrl.identityID +
+			" received a materially equivalent response, so the anonymous caller reached the " +
+			"protected resource itself"
+	}
+
 	verification := model.VerificationRecord{
-		Strategy:  "unauthenticated-probe-with-catch-all-cache-and-repetition-discriminators",
+		Strategy:  strategy,
 		Steps:     steps,
 		Performed: true,
-		Result:    "the operation served an unauthenticated request and no discriminator explained it away",
-		// Without credentials there is no authenticated control request, so we
-		// cannot show that the content returned is the content a legitimate
-		// caller would receive. Confidence is capped accordingly and the gap is
-		// named rather than hidden.
-		Unavailable: unavailable(baseline.established, credentialProbeInconclusive),
+		Result:    result,
+		// Corroboration that was wanted and not obtained is named rather than
+		// omitted. An absent authenticated control caps confidence; it never
+		// silently raises it.
+		Unavailable: unavailable(baseline.established, credentialProbeInconclusive, ctrl.unavailable),
 	}
 
 	finding := &model.Finding{
 		CheckID:      AuthRequiredID,
 		Title:        title,
-		State:        model.StateSuspected,
+		State:        state,
 		Severity:     model.SeverityHigh,
-		Confidence:   model.ConfidenceMedium,
+		Confidence:   confidence,
 		CWE:          []string{"CWE-306"},
 		OWASP:        []string{"API2:2023 Broken Authentication"},
 		OperationID:  op.ID,
@@ -353,20 +411,27 @@ func (c AuthRequired) Run(ctx context.Context, op model.Operation) Result {
 		},
 	}
 
+	detail := "an unauthenticated request succeeded against a declared-protected operation"
+	if ctrl.equivalent {
+		detail += ", and an authenticated control request confirmed it received the protected resource"
+	}
+
 	return Result{
-		Disposition: model.DispositionExecuted,
-		Detail:      "an unauthenticated request succeeded against a declared-protected operation",
-		Finding:     finding,
-		Exchanges:   exchanges,
+		Disposition:       model.DispositionExecuted,
+		Detail:            detail,
+		Finding:           finding,
+		Exchanges:         exchanges,
+		ControlIdentityID: ctrl.identityID,
+		ControlAt:         ctrl.at,
 	}
 }
 
 // unavailable names the corroboration this run could not obtain. Naming a gap
 // caps confidence honestly; omitting it would round the result up.
-func unavailable(baselineEstablished, credentialProbeInconclusive bool) []string {
-	out := []string{
-		"authenticated-control-request: no identity is configured, so the response could " +
-			"not be compared against what a legitimate caller receives",
+func unavailable(baselineEstablished, credentialProbeInconclusive bool, control string) []string {
+	var out []string
+	if control != "" {
+		out = append(out, control)
 	}
 	if !baselineEstablished {
 		out = append(out, "catch-all-baseline: the target has no stable not-found behaviour, so a "+
@@ -603,4 +668,129 @@ func summarize(err error) string {
 		return s[:200] + "…"
 	}
 	return s
+}
+
+// controlResult is what the authenticated control request established.
+type controlResult struct {
+	// equivalent is true only when the anonymous response and the authenticated
+	// control response were materially equivalent. It is the sole condition
+	// under which the finding rises to confirmed.
+	equivalent bool
+	// identityID and at record which identity was used and when the control
+	// completed, so the engine can re-score this result conservatively if a
+	// liveness canary later finds that identity had expired.
+	identityID string
+	at         time.Time
+	// step is the verification step published in the report.
+	step model.VerificationStep
+	// unavailable names the gap when no usable control was obtained. Empty when
+	// the control ran and produced a comparison.
+	unavailable string
+}
+
+// authenticatedControl issues the control request and compares it with the
+// anonymous response.
+//
+// Every failure path returns a result that leaves the finding suspected and
+// names why. That uniformity is the safety property: there is no branch in which
+// an absent, rejected, expired or erroring credential produces anything other
+// than a weaker conclusion.
+func (c AuthRequired) authenticatedControl(
+	ctx context.Context,
+	op model.Operation,
+	anon *model.CapturedResponse,
+	exchanges *[]model.Exchange,
+) controlResult {
+	const stepName = "authenticated-control-equivalent"
+
+	unusable := func(detail string) controlResult {
+		return controlResult{
+			step:        model.VerificationStep{Name: stepName, Passed: false, Detail: detail},
+			unavailable: "authenticated-control-request: " + detail,
+		}
+	}
+
+	if c.Control == nil {
+		return unusable("no identity is configured, so the response could not be compared " +
+			"against what a legitimate caller receives")
+	}
+	if ok, _, why := c.Control.Usable(); !ok {
+		return unusable(why + ", so the response could not be compared against what a " +
+			"legitimate caller receives")
+	}
+
+	url, err := cacheBust(operationURL(op))
+	if err != nil {
+		return unusable("the authenticated control request could not be constructed: " + summarize(err))
+	}
+
+	ex, err := c.Control.Do(ctx, op.Method, url, map[string][]string{
+		"Accept":        {"application/json, */*"},
+		"Cache-Control": {"no-cache"},
+		"Pragma":        {"no-cache"},
+	})
+	if ex.Request.URL != "" {
+		*exchanges = append(*exchanges, ex)
+	}
+	at := c.now()
+	identityID := c.Control.ID()
+
+	if err != nil || ex.Response == nil {
+		return unusable("the authenticated control request as identity " + identityID +
+			" could not be completed: " + summarize(err))
+	}
+
+	// A cached control response may be the anonymous response replayed back by
+	// an intermediary, which would make the two trivially equivalent and
+	// confirm a bypass that does not exist. The URL is cache-busted, but a
+	// misconfigured cache that ignores the query string would defeat that, so
+	// the response is checked as well.
+	if cache := cacheFingerprint(ex.Response); cache != "" {
+		return unusable("the authenticated control appears to have been served from a cache (" +
+			cache + "), so it may be the anonymous response replayed rather than the identity's own")
+	}
+
+	if cls := outcome.Classify(ex.Response, c.Signals); cls.Outcome != model.OutcomeAllowed {
+		// The configured identity did not reach the resource either.
+		//
+		// This is emphatically not evidence that the operation is protected: the
+		// anonymous request already succeeded, so whatever refused the identity
+		// is not an access control that works. The likeliest explanations are an
+		// expired credential or a wrong one, so the identity is asked to check
+		// itself — and the finding stays suspected either way.
+		c.Control.NoteSuspicious(ctx)
+		res := unusable("the authenticated control request as identity " + identityID +
+			" was not granted access (" + cls.Reason + "), so there is no legitimate baseline to " +
+			"compare the anonymous response against")
+		res.identityID = identityID
+		res.at = at
+		return res
+	}
+
+	eq := materiallyEquivalent(anon, ex.Response)
+	if !eq.Equivalent {
+		res := controlResult{
+			identityID: identityID,
+			at:         at,
+			step: model.VerificationStep{
+				Name: stepName, Passed: false,
+				Detail: "the authenticated control succeeded but differed from the anonymous " +
+					"response: " + eq.Reason,
+			},
+			unavailable: "authenticated-control-request: the control succeeded but was not materially " +
+				"equivalent to the anonymous response (" + eq.Reason + "), so it cannot show that the " +
+				"anonymous caller reached the protected resource",
+		}
+		return res
+	}
+
+	return controlResult{
+		equivalent: true,
+		identityID: identityID,
+		at:         at,
+		step: model.VerificationStep{
+			Name: stepName, Passed: true,
+			Detail: "compared against identity " + identityID + ": " + eq.Reason,
+		},
+	}
 }

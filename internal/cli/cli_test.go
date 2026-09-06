@@ -346,3 +346,152 @@ func TestSuspectedHighFindingFailsThePolicy(t *testing.T) {
 		t.Errorf("stderr does not explain the failure: %q", errOut)
 	}
 }
+
+// Secrets must not be passable on a command line. Process listings are readable
+// by other users on most systems, and shell history keeps them long after the
+// run.
+func TestNoFlagAcceptsARawSecret(t *testing.T) {
+	forbidden := []string{"--token", "--api-key", "--apikey", "--password",
+		"--secret", "--credential", "--bearer", "--auth"}
+	for _, cmd := range []string{"scan", "init", "doctor"} {
+		_, out, errOut := run(t, cmd, "--help")
+		help := out + errOut
+		for _, flag := range forbidden {
+			if strings.Contains(help, flag) {
+				t.Errorf("%s exposes %s; a credential must come from the environment or a file",
+					cmd, flag)
+			}
+		}
+	}
+}
+
+// doctor reports whether a credential is available. It must never report what
+// the credential is: its output is pasted into issues and CI logs.
+func TestDoctorReportsIdentitiesWithoutValues(t *testing.T) {
+	const secret = "APPSEC_M1_SECRET_MUST_NEVER_PERSIST_7f91"
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "appsec.yaml"), []byte(
+		"apiVersion: appsec/v1alpha1\n"+
+			"target:\n  baseURL: http://localhost:3000\n"+
+			"identities:\n"+
+			"  - id: admin\n"+
+			"    authentication:\n"+
+			"      type: bearer\n"+
+			"      credential:\n        env: APPSEC_DOCTOR_TOKEN\n"+
+			"  - id: missing\n"+
+			"    authentication:\n"+
+			"      type: bearer\n"+
+			"      credential:\n        env: APPSEC_DOCTOR_ABSENT\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("APPSEC_DOCTOR_TOKEN", secret)
+
+	code, out, _ := run(t, "doctor")
+	if code != ExitOK {
+		t.Fatalf("doctor exit = %d", code)
+	}
+	if strings.Contains(out, secret) {
+		t.Fatal("doctor printed a credential value")
+	}
+	if !strings.Contains(out, "admin") || !strings.Contains(out, "credential source configured") {
+		t.Errorf("doctor does not report a configured identity:\n%s", out)
+	}
+	if !strings.Contains(out, "credential unavailable") {
+		t.Errorf("doctor does not report a missing credential:\n%s", out)
+	}
+	if !strings.Contains(out, "no liveness canary") {
+		t.Errorf("doctor does not warn that expiry cannot be detected:\n%s", out)
+	}
+}
+
+// With no configuration present, doctor must stay silent about identities
+// rather than inventing a section.
+func TestDoctorWithoutConfigReportsNoIdentities(t *testing.T) {
+	t.Chdir(t.TempDir())
+	code, out, _ := run(t, "doctor")
+	if code != ExitOK {
+		t.Fatalf("doctor exit = %d", code)
+	}
+	if strings.Contains(out, "Identities") {
+		t.Errorf("doctor reported identities with no configuration present:\n%s", out)
+	}
+}
+
+// A scan whose identity has no resolvable credential must say so on stderr and
+// still run, rather than failing or silently proceeding as if authenticated.
+func TestScanWarnsAboutAnUnresolvableCredential(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/openapi.json":
+			_, _ = w.Write([]byte(`{"openapi":"3.0.3","info":{"title":"t","version":"1"},
+			  "paths":{"/api/open":{"get":{"security":[]}}}}`))
+		default:
+			w.WriteHeader(404)
+			_, _ = w.Write([]byte(`{"message":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "appsec.yaml"), []byte(
+		"apiVersion: appsec/v1alpha1\n"+
+			"target:\n  baseURL: "+srv.URL+"\n"+
+			"scope:\n  allowPrivateAddresses: true\n"+
+			"identities:\n"+
+			"  - id: admin\n"+
+			"    authentication:\n"+
+			"      type: bearer\n"+
+			"      credential:\n        env: APPSEC_SCAN_ABSENT\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, errOut := run(t, "scan", "--spec-url", srv.URL+"/openapi.json")
+	if !strings.Contains(errOut, "credential unavailable") {
+		t.Errorf("a missing credential was not reported on stderr: %q", errOut)
+	}
+	if !strings.Contains(errOut, "no authenticated control request will be made") {
+		t.Errorf("stderr does not say what the missing credential costs: %q", errOut)
+	}
+
+	// The identity limitation must reach the report, not only the terminal.
+	matches, err := filepath.Glob(filepath.Join(dir, ".appsec", "runs", "*", "report.json"))
+	if err != nil || len(matches) == 0 {
+		t.Fatalf("no report written: %v", err)
+	}
+	raw, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Assurance  struct{ AuthenticatedControl string } `json:"assurance"`
+		Identities []struct {
+			ID     string `json:"id"`
+			Usable bool   `json:"usable"`
+		} `json:"identities"`
+		Coverage []struct {
+			Dimension string `json:"dimension"`
+			Cause     string `json:"cause"`
+		} `json:"coverage"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if len(doc.Identities) != 1 || doc.Identities[0].Usable {
+		t.Errorf("the report does not record the unusable identity: %+v", doc.Identities)
+	}
+	if !strings.Contains(doc.Assurance.AuthenticatedControl, "no credential could be resolved") {
+		t.Errorf("assurance does not state the limitation: %q", doc.Assurance.AuthenticatedControl)
+	}
+	var sawIdentityRow bool
+	for _, e := range doc.Coverage {
+		if e.Dimension == "identity" && e.Cause == "missing_identity" {
+			sawIdentityRow = true
+		}
+	}
+	if !sawIdentityRow {
+		t.Error("the coverage ledger does not carry the blocked identity row")
+	}
+}

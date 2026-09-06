@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jaylordibe/application-security-framework/internal/engine"
+	"github.com/jaylordibe/application-security-framework/internal/identity"
 	"github.com/jaylordibe/application-security-framework/internal/model"
 )
 
@@ -36,9 +37,13 @@ type Document struct {
 	// evidence supports.
 	Assurance Assurance `json:"assurance"`
 
-	Surface  Surface         `json:"surface"`
-	Findings []Finding       `json:"findings"`
-	Coverage []CoverageEntry `json:"coverage"`
+	Surface Surface `json:"surface"`
+	// Identities records what was known about each configured principal. It
+	// carries no credential, no credential length and no fingerprint: an
+	// identity's id is publishable, and its material never is.
+	Identities []Identity      `json:"identities"`
+	Findings   []Finding       `json:"findings"`
+	Coverage   []CoverageEntry `json:"coverage"`
 
 	ToolFailures       []string `json:"toolFailures"`
 	OutOfScopeHosts    []string `json:"outOfScopeHosts"`
@@ -85,6 +90,34 @@ type Assurance struct {
 	// conflating them is how a suspicion becomes a claim.
 	ConfirmedFindings int `json:"confirmedFindings"`
 	SuspectedFindings int `json:"suspectedFindings"`
+	// AuthenticatedControl states what the run could establish about identities,
+	// because whether an authenticated baseline existed bounds how far any
+	// authorization conclusion in this report can go.
+	AuthenticatedControl string `json:"authenticatedControl"`
+}
+
+// Identity is a configured principal and what was established about it.
+type Identity struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
+	// Scheme is the authentication mechanism, e.g. bearer.
+	Scheme string `json:"scheme,omitempty"`
+	// CredentialSource names where the credential was read from, by location.
+	// A location is not a secret; the value it points at is, and is absent.
+	CredentialSource string `json:"credentialSource,omitempty"`
+	// Usable reports whether a credential was resolved at all.
+	Usable bool `json:"usable"`
+	// Problem explains an unusable identity or a failed canary.
+	Problem string `json:"problem,omitempty"`
+	// LivenessMonitored reports whether a canary is configured. Without one an
+	// expiry during the run could not have been detected, which bounds every
+	// conclusion drawn from this identity.
+	LivenessMonitored bool     `json:"livenessMonitored"`
+	Liveness          string   `json:"liveness"`
+	LastGoodAt        string   `json:"lastGoodAt,omitempty"`
+	FirstBadAt        string   `json:"firstBadAt,omitempty"`
+	CanaryProbes      int      `json:"canaryProbes"`
+	Warnings          []string `json:"warnings,omitempty"`
 }
 
 // Surface describes what was discovered and how much it can be trusted.
@@ -205,10 +238,28 @@ func Build(res engine.Result, version string) Document {
 			Warnings:     res.Surface.Warnings,
 		},
 		Findings:           make([]Finding, 0, len(res.Findings)),
+		Identities:         make([]Identity, 0, len(res.Identities)),
 		Coverage:           make([]CoverageEntry, 0, len(res.Coverage)),
 		ToolFailures:       nonNil(res.ToolFailures),
 		OutOfScopeHosts:    nonNil(res.OutOfScopeHosts),
 		ClassesNotAssessed: nonNil(res.ClassesNotAssessed),
+	}
+
+	for _, st := range res.Identities {
+		doc.Identities = append(doc.Identities, Identity{
+			ID:                st.ID,
+			Label:             st.Label,
+			Scheme:            string(st.Scheme),
+			CredentialSource:  st.Source,
+			Usable:            st.Usable,
+			Problem:           st.Problem,
+			LivenessMonitored: st.Monitored,
+			Liveness:          string(st.Liveness),
+			LastGoodAt:        timeOrEmpty(st.LastGood),
+			FirstBadAt:        timeOrEmpty(st.FirstBad),
+			CanaryProbes:      st.Probes,
+			Warnings:          st.Warnings,
+		})
 	}
 
 	for _, f := range res.Findings {
@@ -255,6 +306,15 @@ func Build(res engine.Result, version string) Document {
 	return doc
 }
 
+// timeOrEmpty renders a timestamp, or nothing when it was never set. A zero
+// time rendered as "0001-01-01T00:00:00Z" reads as a real observation.
+func timeOrEmpty(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
 func toSteps(in []model.VerificationStep) []VerificationStep {
 	if len(in) == 0 {
 		return nil
@@ -295,6 +355,8 @@ func buildAssurance(res engine.Result) Assurance {
 		a.SurfaceCompleteness = "No specification was available, so no attack surface was enumerated."
 	}
 
+	a.AuthenticatedControl = authenticatedControlStatement(res)
+
 	switch {
 	case a.ExecutedChecks == 0:
 		a.Statement = "This assessment executed no checks. It establishes nothing about the " +
@@ -306,6 +368,52 @@ func buildAssurance(res engine.Result) Assurance {
 			"classesNotAssessed for weakness classes nothing in this run examined."
 	}
 	return a
+}
+
+// authenticatedControlStatement says what the run could establish about the
+// identities it was given.
+//
+// This sentence exists because "no confirmed findings" means something very
+// different depending on whether an authenticated baseline was available. A
+// reader who does not know which case they are in cannot interpret the rest of
+// the report.
+func authenticatedControlStatement(res engine.Result) string {
+	if len(res.Identities) == 0 {
+		return "No identity was configured, so no authenticated control request was made. " +
+			"No finding can reach confirmed without one, and every authorization conclusion here " +
+			"rests on unauthenticated observation alone."
+	}
+	var usable, monitored, bad int
+	for _, st := range res.Identities {
+		if st.Usable {
+			usable++
+		}
+		if st.Monitored {
+			monitored++
+		}
+		if st.Liveness == identity.LivenessBad {
+			bad++
+		}
+	}
+	switch {
+	case usable == 0:
+		return "An identity was configured but no credential could be resolved, so no " +
+			"authenticated control request was made. Authorization conclusions here rest on " +
+			"unauthenticated observation alone; see the identity rows in the coverage ledger."
+	case bad > 0:
+		return "An identity was rejected by the target during this run. Results that depended on " +
+			"it are withdrawn and marked blocked, and any finding it corroborated is reported as " +
+			"suspected rather than confirmed."
+	case monitored == 0:
+		return "An authenticated control request was available, but no liveness canary is " +
+			"configured, so a credential expiring during the run could not have been detected. " +
+			"Confirmed findings here were each corroborated by a control request that succeeded " +
+			"at the moment it ran."
+	default:
+		return "An authenticated control request was available and its identity was confirmed " +
+			"live by a canary, so an anonymous response could be compared against what a " +
+			"legitimate caller receives."
+	}
 }
 
 // nonNil ensures slices marshal as [] rather than null, so consumers need no

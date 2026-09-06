@@ -35,6 +35,45 @@ consumer can detect a change rather than misparse.
   path-traversal and symlink refusal.
 - Offline evaluation harness with paired known-vulnerable and known-secure fixtures.
 
+### Added — M1: identities and an authenticated control request
+
+- `internal/identity`: a framework-neutral identity model in which a principal holds a
+  *reference* to a credential and never the credential itself. Credentials resolve from an
+  environment variable or a file; `appsec.yaml` has no field that accepts a value, and no
+  CLI flag does either.
+- A `Secret` type whose `String`, `GoString` and `MarshalJSON` render a placeholder, so
+  `%v`, `%+v`, `%#v`, structured logging, error formatting and whole-struct JSON marshalling
+  are all closed at once rather than at every call site.
+- Bearer and header API-key authentication. Header names are validated as RFC 9110 field
+  names, and headers controlling message framing, the connection or the tool's
+  identifiability are refused. Query-string API keys are deliberately not supported.
+- An authenticated control request in the declared-auth check. A finding reaches
+  `confirmed` only when the control succeeded and its response was materially equivalent to
+  the anonymous one — same outcome, status, content type and JSON document shape, with no
+  cache hit on the control. Everything else stays `suspected` with the gap named.
+- An identity liveness canary on an operator-nominated safe operation, with three states,
+  and conservative re-scoring of any work corroborated inside the window between the last
+  confirmed-good probe and the first bad one.
+- A second coverage dimension, `identity`, so that an authentication limitation is visible
+  in the ledger rather than only in a finding's prose. Headline counts filter to the
+  `operation` dimension so configuring an identity cannot inflate them.
+- `identities` in the JSON report and SARIF run properties, and an
+  `assurance.authenticatedControl` statement, because "no confirmed findings" means
+  something different depending on whether an authenticated baseline existed.
+- `appsec doctor` reports whether each identity's credential is available, by location,
+  and never its value.
+- Evaluation fixtures for a real bypass, a correctly protected operation, three misleading
+  200 responses, a missing credential, a rejected credential, mid-run invalidation, a
+  malicious off-origin redirect, and an end-to-end search of the whole run directory for the
+  credential.
+
+### Security hardening found by adversarial review of M1
+
+- Refuse to confirm on a cached authenticated control response. An intermediary serving the
+  anonymous response back for the authenticated request would have made the two trivially
+  equivalent and confirmed a bypass that did not exist. Found by review, reproduced by test,
+  and the test fails without the guard.
+
 ### Changed
 
 - Adopted the project's final identity: product **Application Security Framework**,
