@@ -263,6 +263,14 @@ func TestGeneratedConfigIsValid(t *testing.T) {
 }
 
 func TestDoctorReportsMissingEnginesWithoutFailing(t *testing.T) {
+	// PATH is emptied so this tests the absent-engine path deterministically.
+	//
+	// Without it the test asserts a property of the developer's machine rather
+	// than of the code: it passed everywhere until an engine was actually
+	// installed, and then failed — which is exactly backwards, because the
+	// repository's own engine-integration CI job installs Nuclei.
+	t.Setenv("PATH", t.TempDir())
+
 	code, out, _ := run(t, "doctor")
 	if code != ExitOK {
 		t.Fatalf("doctor exit = %d", code)

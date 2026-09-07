@@ -421,3 +421,39 @@ func TestTheSignatureClaimReflectsHowTheRunWasConfigured(t *testing.T) {
 		t.Errorf("the waiver is not disclosed: %v", waived.Limitations)
 	}
 }
+
+// Found by running the real Nuclei v3.11.1 against the reference Laravel
+// application during the product validation gate.
+//
+// The stock "missing-cookie-samesite-strict" template extracts the whole
+// Set-Cookie header, so extracted-results contained a live `api_session` value.
+// That field was being imported as evidence on the assumption that the caller's
+// redactor would clean it — but the redactor only removes credentials this
+// assessment registered, never a secret belonging to the target.
+func TestNucleiExtractorOutputIsNotImported(t *testing.T) {
+	const sessionCookie = "api_session=eyJpdiI6IkpxWjlOQWxDLVNFQ1JFVCJ9"
+	record := `{"template-id":"missing-cookie-samesite-strict",` +
+		`"info":{"name":"Missing Cookie SameSite Strict","severity":"info"},` +
+		`"matched-at":"http://127.0.0.1:8000","matcher-name":"cookie-check",` +
+		`"extracted-results":["XSRF-TOKEN=abc; path=/; samesite=lax ` + sessionCookie + `"],` +
+		`"matcher-status":true}`
+
+	n := normalize(t, record)
+	if len(n.Observations) != 1 {
+		t.Fatalf("observations = %d, want 1", len(n.Observations))
+	}
+
+	whole, err := json.Marshal(n.Observations[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(whole), "api_session") || strings.Contains(string(whole), "eyJpdiI6") {
+		t.Fatalf("a target session cookie was imported from extracted-results: %s", whole)
+	}
+
+	// The matcher name is kept: it is written by the template author, says which
+	// branch fired, and is what a triager actually needs.
+	if got := n.Observations[0].Evidence; got != "matcher: cookie-check" {
+		t.Errorf("Evidence = %q, want the matcher name", got)
+	}
+}

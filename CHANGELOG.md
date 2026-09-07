@@ -206,6 +206,47 @@ consumer can detect a change rather than misparse.
 - The CI check forbidding Semgrep registry rule packs matched the code that refuses them.
   A mention must now be annotated as a refusal; anything else still fails.
 
+### Corrected — product validation gate
+
+Found by running the real Nuclei v3.11.1 and a live `laravel-api` instance, none by review.
+
+- **Adapter facts never matched a real specification.** OpenAPI paths are relative to
+  `servers[].url`, so a document declaring `servers: [{url: ".../api"}]` spells a route
+  `/activity-logs` while a framework adapter reading the routing table spells it
+  `/api/activity-logs`. `Operation.ID` is built from the relative path, so all 40 adapter
+  facts about the reference application missed, the entire documented surface was reported
+  as undocumented, and M5 re-added all 40 as "adapter-discovered" — inflating the surface
+  from 38 to 78 with duplicates of routes already in it. `Operation.AbsolutePath()` is now
+  matched in both the adapter and discovery merges: 40 bogus undocumented routes became 3
+  genuine ones.
+- **Nuclei's `extracted-results` was imported as evidence.** Against the reference
+  application the stock `missing-cookie-samesite-strict` template extracted the whole
+  `Set-Cookie` header, including a live `api_session` value. It was imported on the belief
+  that the caller's redactor would clean it; the redactor can only remove credentials this
+  assessment registered, never a secret belonging to the target. Nothing leaked, because
+  the field was discarded before persistence — one well-meaning change away from a leak.
+  It is now refused like `request`, `response` and `curl-command`, and the matcher name is
+  imported instead.
+- **The terminal said nothing about an identity the target rejected.** With an expired
+  token the JSON report was correct — liveness `bad`, the canary's failing status,
+  dependent results withdrawn — while the terminal printed the same counts as a healthy run
+  and exited zero. That is a false-assurance path in this tool's own output.
+- `TestDoctorReportsMissingEnginesWithoutFailing` depended on the ambient `PATH`, so it
+  passed only on machines without an engine installed — including, backwards, breaking on
+  any machine where the repository's own engine-integration job had run.
+- **An external engine wrote into the operator's working directory.** An engine's
+  environment is built from nothing, so it has no `HOME`, and Nuclei responds by creating a
+  `.nuclei-config` tree wherever it was started. A scan is contained by its workspace, but
+  the version probe that runs first had no working directory at all, so `appsec doctor` and
+  every scan left that tree in the directory the operator ran from. Version probes now run
+  in a scratch directory that is removed afterwards.
+
+### Validated — M4 real-engine gap closed for Nuclei
+
+- `TestNucleiFindsAPlantedMarker` now runs against the real Nuclei v3.11.1 rather than
+  skipping. The shipped binary accepts the argument vector this repository builds, and its
+  real JSONL output parses into the observations the normalizer expects.
+
 ### Added — M5: surface beyond the specification
 
 - `internal/discovery`: undocumented surface from four artefacts the application publishes

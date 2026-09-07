@@ -428,6 +428,7 @@ authentication bypass — a silent pass is the worst possible default for a secu
 | [External engines](docs/engines/README.md) | installing, configuring and what each one covers |
 | [Adapters on real applications](docs/evaluation/adapters-on-reference-applications.md) | what they extract, and what they cannot |
 | [Engines on real applications](docs/evaluation/engines-on-reference-applications.md) | what M4 ran, what it could not, and why M4 is partial |
+| [Product validation gate](docs/evaluation/product-validation-gate.md) | does this justify its complexity? evidence, and a REPOSITION recommendation |
 | [Discovery on real applications](docs/evaluation/discovery-on-reference-applications.md) | what M5 finds on the reference apps, and why that is mostly nothing |
 | [ADRs](docs/adr/) | consequential decisions and their alternatives |
 | [Roadmap](docs/roadmap.md) | what is next, and what is explicitly out |

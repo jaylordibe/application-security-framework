@@ -76,7 +76,7 @@ func (Engine) Detect(ctx context.Context, s scanner.Settings) scanner.Availabili
 	if err != nil {
 		return scanner.Availability{Problem: err.Error()}
 	}
-	res, runErr := proc.Run(ctx, proc.Spec{
+	res, runErr := scanner.ProbeVersion(ctx, proc.Spec{
 		Name: "sast --version", Path: path, Args: []string{"--version"},
 		Env: []string{}, Timeout: scanner.DefaultVersionTimeout,
 		MaxStdout: 64 << 10, MaxStderr: 64 << 10,

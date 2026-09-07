@@ -253,3 +253,27 @@ func TestOffOriginReferencesAreNotTargetSurface(t *testing.T) {
 		t.Errorf("an off-origin reference produced a coverage row: %d rows", len(rows))
 	}
 }
+
+// The same server-base-path defect, on the discovery side: a Link header, a
+// robots.txt line and a JavaScript literal all name the path the application
+// serves, never the specification-relative template.
+func TestDiscoveredPathsCorroborateOperationsBehindAServerBasePath(t *testing.T) {
+	ops := []model.Operation{
+		{ID: "GET /activity-logs", Method: "GET", PathTemplate: "/activity-logs",
+			BaseURL: "http://localhost:8000/api"},
+		{ID: "GET /users/{id}", Method: "GET", PathTemplate: "/users/{id}",
+			BaseURL: "http://localhost:8000/api"},
+	}
+
+	m := Merge(ops, []model.PathCandidate{
+		candidate("/api/activity-logs", model.SourceJavaScript),
+		candidate("/api/users/42", model.SourceLinkHeader),
+	})
+
+	if len(m.Undocumented) != 0 {
+		t.Errorf("documented routes were reported as undocumented surface: %+v", m.Undocumented)
+	}
+	if len(m.Corroborated) != 2 {
+		t.Errorf("corroborated = %d, want both: %+v", len(m.Corroborated), m.Corroborated)
+	}
+}

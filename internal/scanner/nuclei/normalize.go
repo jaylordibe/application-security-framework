@@ -154,11 +154,31 @@ func toObservation(r result) scanner.Observation {
 		References:       classifications(r),
 		Detail:           detail(r),
 	}
-	// Extractor output is the closest thing to evidence Nuclei offers that is
-	// not a raw request or response. It is still target-controlled, so it is
-	// bounded here and sanitized and redacted by the caller.
-	if len(r.Extracted) > 0 {
-		o.Evidence = "extracted: " + strings.Join(clip(r.Extracted, 8), ", ")
+	// "extracted-results" is deliberately NOT imported, and the reason was
+	// established by running the real tool against a real application rather
+	// than reasoned about.
+	//
+	// Nuclei's extractor output was previously treated as the safest evidence
+	// the tool offers, on the grounds that it is not a raw request or response
+	// and that the caller redacts it. Both halves of that were wrong. The field
+	// is whatever a third-party template chose to pull out of a response, so its
+	// sensitivity is decided by the template author, not by us; and the redactor
+	// can only remove values it was told about — this assessment's own
+	// credentials — not a secret belonging to the target.
+	//
+	// Against the reference Laravel application, the stock
+	// "missing-cookie-samesite-strict" template extracted the complete
+	// Set-Cookie header, including a live `api_session` value. That is the
+	// target's own session cookie arriving in an artefact destined for a report
+	// and a ticket. It is the same class as `request`, `response` and
+	// `curl-command`, which M4 already refuses, and it is refused here for the
+	// same reason.
+	//
+	// The matcher name is kept instead: it says which branch of the template
+	// fired, which is what a triager actually needs, and it is written by the
+	// template author rather than by the target.
+	if r.MatcherName != "" {
+		o.Evidence = "matcher: " + r.MatcherName
 	}
 	return o
 }

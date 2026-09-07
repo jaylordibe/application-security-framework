@@ -429,3 +429,43 @@ func TestSummaryOmitsTheEngineBlockWhenNoneRan(t *testing.T) {
 		t.Errorf("an engine line appeared with no engines configured:\n%s", got)
 	}
 }
+
+// A dead credential is the most consequential silent failure an assessment can
+// have, and the terminal used to say nothing about it: same counts as a healthy
+// run, exit zero, no mention. Found against a real application during the
+// product validation gate.
+func TestSummaryStatesAnIdentityTheTargetRejected(t *testing.T) {
+	got := Summary(Document{Identities: []Identity{{
+		ID: "sysad", Usable: true, LivenessMonitored: true, Liveness: "bad",
+		Problem: "the liveness canary GET /api/users returned 401, which is not an accepted status",
+	}}})
+
+	if !strings.Contains(got, "REJECTED BY THE TARGET") {
+		t.Errorf("a rejected identity is invisible in the terminal:\n%s", got)
+	}
+	if !strings.Contains(got, "returned 401") {
+		t.Errorf("the summary does not say why the identity failed:\n%s", got)
+	}
+	if !strings.Contains(got, "not a clean result") {
+		t.Errorf("the summary does not say what the failure costs:\n%s", got)
+	}
+}
+
+func TestSummaryStatesAnUnusableIdentity(t *testing.T) {
+	got := Summary(Document{Identities: []Identity{{
+		ID: "admin", Usable: false, Problem: "APPSEC_ADMIN_TOKEN is not set",
+	}}})
+	if !strings.Contains(got, "UNUSABLE") || !strings.Contains(got, "is not set") {
+		t.Errorf("an unusable identity is invisible in the terminal:\n%s", got)
+	}
+}
+
+// A healthy identity must not add noise.
+func TestSummarySaysNothingAboutAHealthyIdentity(t *testing.T) {
+	got := Summary(Document{Identities: []Identity{{
+		ID: "sysad", Usable: true, LivenessMonitored: true, Liveness: "good",
+	}}})
+	if strings.Contains(got, "identity sysad") {
+		t.Errorf("a healthy identity produced terminal noise:\n%s", got)
+	}
+}

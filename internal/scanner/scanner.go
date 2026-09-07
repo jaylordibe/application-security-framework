@@ -19,6 +19,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -298,6 +299,28 @@ func sanitizeAll(in []string, max int) []string {
 		}
 	}
 	return out
+}
+
+// ProbeVersion runs an engine's own version flag in a scratch directory.
+//
+// The scratch directory is the point. The environment handed to an engine is
+// built from nothing, so it has no HOME — and a tool that cannot find its home
+// falls back to its working directory. Nuclei does exactly this: with no HOME it
+// creates a `.nuclei-config` tree wherever it was started, which for a version
+// probe is the operator's own project directory. A scan is already contained by
+// its workspace; the probe that runs before the scan was not, so an external
+// program was writing into the directory the operator ran `appsec` from.
+//
+// The directory is removed afterwards whatever the probe did.
+func ProbeVersion(ctx context.Context, spec proc.Spec) (proc.Result, error) {
+	dir, err := os.MkdirTemp("", "appsec-probe-")
+	if err == nil {
+		defer func() { _ = os.RemoveAll(dir) }()
+		spec.Dir = dir
+	}
+	// A probe that could not get a scratch directory still runs: failing to
+	// detect an installed engine would be a worse outcome than an untidy one.
+	return proc.Run(ctx, spec)
 }
 
 // ToFinding converts an observation into a finding in the observed state.

@@ -549,3 +549,57 @@ func TestImportedFindingsHaveDistinctStableIdentities(t *testing.T) {
 		t.Errorf("the identity changed between runs: %q then %q", a.ID, again.ID)
 	}
 }
+
+// An engine must not write into the directory the operator ran appsec from.
+//
+// Found during the product validation gate: the environment handed to an engine
+// is built from nothing, so it has no HOME, and Nuclei responds by creating a
+// `.nuclei-config` tree in its working directory. The scan itself is contained
+// by its workspace, but the version probe that runs first had no directory at
+// all, so `appsec doctor` and every scan left that tree in the operator's
+// project — and in this repository, in two package directories.
+func TestVersionProbeDoesNotRunInTheWorkingDirectory(t *testing.T) {
+	bin := buildFake(t, "cwd", `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	wd, _ := os.Getwd()
+	fmt.Println(wd)
+	// What a tool with no HOME does: write beside itself.
+	_ = os.WriteFile("engine-litter.txt", []byte("x"), 0o600)
+}
+`)
+
+	here, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := ProbeVersion(context.Background(), proc.Spec{
+		Name: "cwd", Path: bin, Env: []string{}, Timeout: 20 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("probe: %v (%s)", err, res.Stderr)
+	}
+
+	childDir := strings.TrimSpace(string(res.Stdout))
+	if childDir == "" {
+		t.Fatal("the probe produced no working directory")
+	}
+	if childDir == here {
+		t.Errorf("the version probe ran in the caller's working directory %q; an engine that "+
+			"writes its config beside itself would litter the operator's project", here)
+	}
+	if _, err := os.Stat(filepath.Join(here, "engine-litter.txt")); err == nil {
+		_ = os.Remove(filepath.Join(here, "engine-litter.txt"))
+		t.Error("the probe wrote a file into the caller's working directory")
+	}
+	// The scratch directory is removed whatever the probe did.
+	if _, err := os.Stat(childDir); !os.IsNotExist(err) {
+		t.Errorf("the probe's scratch directory %q survived the call", childDir)
+	}
+}

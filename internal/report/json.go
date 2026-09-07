@@ -909,6 +909,36 @@ func Summary(doc Document) string {
 	// nothing. The count is deliberately not folded into the findings line:
 	// these are another tool's claims, and merging them would be exactly the
 	// promotion this project refuses to do.
+	// An identity that is unusable or that the target rejected is stated in the
+	// terminal.
+	//
+	// This was found by the product validation gate, running against a real
+	// application with a deliberately expired token. The JSON report was
+	// entirely correct — liveness "bad", the canary's exact status, and a
+	// statement that dependent results had been withdrawn — and the terminal
+	// said nothing at all. The run printed the same counts as a healthy one and
+	// exited zero, so an operator reading their console saw a clean assessment
+	// of an application that had in fact refused every credential.
+	//
+	// That is a false-assurance path in this tool's own output, which is the
+	// exact failure it exists to prevent elsewhere.
+	for _, id := range doc.Identities {
+		switch {
+		case !id.Usable:
+			b.WriteString("\n  identity " + id.ID + ": UNUSABLE — " + id.Problem + "\n")
+		case id.Liveness == "bad":
+			b.WriteString("\n  identity " + id.ID + ": REJECTED BY THE TARGET — " + id.Problem +
+				"\n")
+		case id.LivenessMonitored && id.Liveness != "good":
+			b.WriteString("\n  identity " + id.ID + ": liveness " + id.Liveness + "\n")
+		default:
+			continue
+		}
+		b.WriteString(wrap("Work that depended on this identity is blocked rather than passed, "+
+			"and any finding it would have corroborated is reported as suspected rather than "+
+			"confirmed. This run is not a clean result for that work.", 76, "  "))
+	}
+
 	// Discovered surface is stated in the terminal, not only in the JSON.
 	//
 	// An operator who sees "untested: 14" needs to know that thirteen of those

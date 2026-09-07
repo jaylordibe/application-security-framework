@@ -74,7 +74,7 @@ func (Engine) Detect(ctx context.Context, s scanner.Settings) scanner.Availabili
 		return scanner.Availability{Problem: err.Error()}
 	}
 
-	res, runErr := proc.Run(ctx, proc.Spec{
+	res, runErr := scanner.ProbeVersion(ctx, proc.Spec{
 		Name: "nuclei --version",
 		Path: path,
 		Args: []string{"-version"},

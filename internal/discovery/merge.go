@@ -48,11 +48,23 @@ func Merge(ops []model.Operation, candidates []model.PathCandidate) Merged {
 
 	// Index the known surface by path template. Several operations may share one
 	// path (GET and POST on /users), so the value is a list.
+	// Operations are indexed by the path the application actually serves, not by
+	// the specification-relative template.
+	//
+	// A discovered path is always application-absolute — a Link header, a
+	// robots.txt line and a JavaScript literal all name "/api/orders", never
+	// "/orders". A specification whose server URL carries a base path spells the
+	// same route "/orders". Indexing on the template alone means nothing
+	// corroborates and every documented route is re-reported as undocumented.
 	byPath := map[string][]model.Operation{}
 	var templates []model.Operation
 	for _, op := range ops {
-		byPath[op.PathTemplate] = append(byPath[op.PathTemplate], op)
-		if strings.ContainsRune(op.PathTemplate, '{') {
+		served := op.AbsolutePath()
+		byPath[served] = append(byPath[served], op)
+		if served != op.PathTemplate {
+			byPath[op.PathTemplate] = append(byPath[op.PathTemplate], op)
+		}
+		if strings.ContainsRune(served, '{') {
 			templates = append(templates, op)
 		}
 	}
@@ -102,7 +114,7 @@ func Merge(ops []model.Operation, candidates []model.PathCandidate) Merged {
 func matchTemplates(templates []model.Operation, path string) []model.Operation {
 	var out []model.Operation
 	for _, op := range templates {
-		if templateMatches(op.PathTemplate, path) {
+		if templateMatches(op.AbsolutePath(), path) || templateMatches(op.PathTemplate, path) {
 			out = append(out, op)
 		}
 	}

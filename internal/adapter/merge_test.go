@@ -239,3 +239,48 @@ func TestMergeCarriesTheMethodsProvenance(t *testing.T) {
 		t.Errorf("static provenance = %s, want inferred", forStatic.Merges[0].Provenance)
 	}
 }
+
+// The defect this pins was found by running against a real application, and it
+// made the adapter worse than useless there.
+//
+// Laravel's Scramble emits `servers: [{url: "http://host/api"}]` with paths
+// relative to it, so the specification spells a route `GET /activity-logs`. The
+// adapter reads the routing table and spells the same route
+// `GET /api/activity-logs`. Matching on the identifier alone meant every one of
+// the adapter's 40 facts missed, the entire documented surface was reported as
+// undocumented, and M5 then re-added all 40 as "adapter-discovered" operations —
+// doubling the surface with duplicates of routes already in it.
+func TestAdapterFactsMatchOperationsBehindAServerBasePath(t *testing.T) {
+	ops := []model.Operation{{
+		ID:           model.OperationID("GET", "/activity-logs"),
+		Method:       "GET",
+		PathTemplate: "/activity-logs",
+		BaseURL:      "http://localhost:8000/api",
+	}}
+
+	docs := []Document{{
+		Adapter: AdapterInfo{Name: "laravel", ExtractionMethod: MethodStaticLexical},
+		Facts: []Fact{{
+			Kind:      KindAuthentication,
+			Operation: OperationRef{Method: "GET", Path: "/api/activity-logs"},
+			Value:     AuthenticationRequired,
+		}},
+	}}
+
+	res := MergeInto(ops, docs, func() model.Source { return model.Source{} })
+
+	if len(res.UnmatchedOperations) != 0 {
+		t.Errorf("the adapter's fact about a documented route was reported as undocumented: %v",
+			res.UnmatchedOperations)
+	}
+	if len(res.DiscoveredOperations) != 0 {
+		t.Errorf("a route already in the specification was re-added as discovered surface: %v",
+			res.DiscoveredOperations)
+	}
+	if len(res.Merges) != 1 {
+		t.Fatalf("merges = %d, want the adapter fact to reconcile with the operation", len(res.Merges))
+	}
+	if !res.Operations[0].DeclaresAuthRequired() {
+		t.Error("the adapter's expectation did not reach the operation")
+	}
+}

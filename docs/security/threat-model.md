@@ -709,6 +709,11 @@ adapters, so there is one implementation of every guarantee rather than three.
 - Both pipes drained concurrently and bounded. Draining one to completion first
   deadlocks the moment the other fills, which a hostile engine can arrange.
   **TESTED** (`scanner.TestEngineFailuresAreExplicit`).
+- Version probes run in their own scratch directory, removed afterwards. An engine
+  given no `HOME` — which is what "built from nothing" means — falls back to its
+  working directory, so a probe with no directory of its own writes into whatever
+  directory the operator ran `appsec` from. **TESTED**
+  (`scanner.TestVersionProbeDoesNotRunInTheWorkingDirectory`).
 - A private temporary workspace per run, mode 0700, removed afterwards. ZAP is
   additionally given a private home inside it, so a scan cannot accumulate state
   in the operator's home directory or inherit it from a previous run. **TESTED**
@@ -794,15 +799,35 @@ the target chooses that.
   assessment's credentials — so a bearer token reflected in a matched response
   does not reach disk.
 - **Secret-bearing fields are not imported at all.** Nuclei's `request`,
-  `response`, `template-encoded` and `curl-command` are never decoded: the curl
+  `response`, `template-encoded`, `extracted-results` and `curl-command` are never
+  decoded: the curl
   command carries the `Authorization` header, and the request and response are
   raw HTTP. Semgrep's matched source lines are likewise dropped, because secrets
   live in source and a report that quotes it copies an application into an
   artefact attached to tickets. **TESTED**
   (`nuclei.TestNormalizePreservesProvenanceAndDropsSecretBearingFields`,
+  `nuclei.TestNucleiExtractorOutputIsNotImported`,
   `sast.TestMatchedSourceIsNotImported`).
+  `extracted-results` was added to that list by the product validation gate, not
+  by reasoning: run against the reference Laravel application, the stock
+  `missing-cookie-samesite-strict` template extracted the whole `Set-Cookie`
+  header, so the field contained a live `api_session` value. It had been imported
+  on the belief that the caller's redactor would clean it, and the redactor can
+  only remove credentials this assessment registered — never a secret belonging
+  to the target. The matcher name is kept instead.
 - Recorded argument vectors are redacted before storage, so a credential in a
   target URL does not become a copy-and-paste command in a report.
+
+**A rejected identity is stated in the terminal, not only in the report.** Also
+found by the validation gate: with a deliberately expired token the JSON report
+was entirely correct — liveness `bad`, the canary's exact status, and a statement
+that dependent results were withdrawn — while the terminal printed the same
+counts as a healthy run and exited zero. An operator reading their console saw a
+clean assessment of an application that had refused every credential, which is a
+false-assurance path in this tool's own output. **TESTED**
+(`report.TestSummaryStatesAnIdentityTheTargetRejected`,
+`report.TestSummaryStatesAnUnusableIdentity`,
+`report.TestSummarySaysNothingAboutAHealthyIdentity`).
 
 **A failure never becomes a clean result.** This is the requirement M4 exists
 around, since the alternative is a crashed scanner silently contributing nothing

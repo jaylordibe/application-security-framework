@@ -14,6 +14,7 @@ package model
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -241,6 +242,35 @@ func (o Operation) DeclaresAuthRequired() bool {
 // operation as requiring no authentication.
 func (o Operation) DeclaresPublic() bool {
 	return o.Security != nil && len(o.Security) == 0
+}
+
+// AbsolutePath returns the path as the application actually serves it.
+//
+// PathTemplate is relative to the specification's server URL, because that is
+// how OpenAPI defines it: a document with `servers: [{url: "https://x/api"}]`
+// and a path of `/orders` describes the route `/api/orders`. Request
+// construction has always been correct, because it joins BaseURL and
+// PathTemplate.
+//
+// Identity was not. Operation.ID is built from PathTemplate, so the same route
+// has one identifier when it comes from a specification (`GET /orders`) and a
+// different one when it comes from a framework adapter or a discovered path,
+// both of which necessarily speak in application-absolute paths
+// (`GET /api/orders`). Any source that does not read the specification cannot
+// know the server prefix to strip, so matching has to happen here instead.
+func (o Operation) AbsolutePath() string {
+	if o.BaseURL == "" {
+		return o.PathTemplate
+	}
+	u, err := url.Parse(o.BaseURL)
+	if err != nil {
+		return o.PathTemplate
+	}
+	prefix := strings.TrimRight(u.Path, "/")
+	if prefix == "" || prefix == "/" {
+		return o.PathTemplate
+	}
+	return prefix + o.PathTemplate
 }
 
 // RequiredPathParams returns the names of path parameters that must be given a

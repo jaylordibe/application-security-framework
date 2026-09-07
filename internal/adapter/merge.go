@@ -125,9 +125,24 @@ func MergeInto(ops []model.Operation, docs []Document, now func() model.Source) 
 	out := MergeResult{Operations: make([]model.Operation, len(ops))}
 	copy(out.Operations, ops)
 
+	// Operations are indexed by identifier and, separately, by the path the
+	// application actually serves.
+	//
+	// The second index is what makes an adapter useful against a real
+	// specification. OpenAPI paths are relative to the document's server URL,
+	// so a document with `servers: [{url: "https://x/api"}]` spells the route
+	// `GET /orders`, while a framework adapter reading the routing table spells
+	// the same route `GET /api/orders`. Matching on the identifier alone means
+	// every adapter fact about a documented route silently misses, and the whole
+	// surface is then reported as undocumented — which is worse than no adapter
+	// at all, because it doubles the surface with duplicates.
 	index := make(map[string]int, len(ops))
+	absIndex := make(map[string]int, len(ops))
 	for i, op := range out.Operations {
 		index[op.ID] = i
+		if abs := op.AbsolutePath(); abs != op.PathTemplate {
+			absIndex[model.OperationID(op.Method, abs)] = i
+		}
 	}
 
 	unmatched := map[string]struct{}{}
@@ -146,6 +161,9 @@ func MergeInto(ops []model.Operation, docs []Document, now func() model.Source) 
 		for _, f := range doc.Facts {
 			opID := f.Operation.ID()
 			idx, known := index[opID]
+			if !known {
+				idx, known = absIndex[opID]
+			}
 			if !known {
 				unmatched[fmt.Sprintf("%s (reported by adapter %s)", opID, doc.Adapter.Name)] = struct{}{}
 				op, first := discovered[opID]
