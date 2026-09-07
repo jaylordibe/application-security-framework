@@ -13,7 +13,12 @@ import (
 
 // persistAndSummarize writes the run artefacts and chooses the exit code.
 func persistAndSummarize(res engine.Result, run *store.Run, pol config.Policy, stdout, stderr io.Writer) error {
-	doc := report.Build(res, Version)
+	// resolveVersion, not the raw linked variable: a binary from
+	// `go install ...@v0.1.0` never sees the Makefile, so the linked value stays
+	// at its development default. Every report it wrote would then claim to have
+	// been produced by "0.0.0-dev", which is the one field a consumer has for
+	// working out what produced an artefact.
+	doc := report.Build(res, resolveVersion())
 
 	if err := run.WriteJSON("report.json", doc); err != nil {
 		return fail(ExitInternal, "%v", err)

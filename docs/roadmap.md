@@ -399,11 +399,11 @@ that were all wrong.
 | Path identity | The distinction covered wherever operation identity is compared. | ✅ `Operation.MatchesID` accepts both spellings and is used at all three operator-facing sites. It closed a **fail-open**: `assessment.excludeOperations` silently did not match against any specification with a server base path, so an operation the operator forbade was exercised. |
 | Fixture applicability | Corpus cases pairing an ownership fixture with collection, health and enumeration endpoints. | ✅ `Fixture.Addresses` plus a test built from the exact operations that produced the fourteen false positives. |
 | Terminal output | Every assurance-relevant fact asserted against the terminal as well as the JSON. | ✅ Rejected identities, unusable identities and failed components now appear in the summary, each with a test. The reference harness asserts the terminal counters agree with the ledger. |
-| Real engines | ZAP and Semgrep/opengrep proven against real binaries as Nuclei is. | ✅ All three. Nuclei v3.11.1, opengrep v1.29.0, ZAP 2.17.0 — see below. |
+| Real engines | ZAP and the source analyser proven against real binaries as Nuclei is. | ✅ for all three integrations — Nuclei v3.11.1, ZAP 2.17.0, opengrep v1.29.0. **Semgrep itself was never executed**: the source-analysis integration accepts either binary and only opengrep has been run. See [docs/engines/README.md](engines/README.md#validation-status). |
 
 ### What running the real engines found
 
-M4 shipped ZAP and Semgrep/opengrep integrations that had never been executed. Both were
+M4 shipped ZAP and source-analysis integrations that had never been executed. Both were
 broken, in ways no fixture could have shown:
 
 - **opengrep could never have run.** M4 recorded that supporting the fork "cost a name in a

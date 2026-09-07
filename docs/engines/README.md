@@ -1,7 +1,8 @@
 # External engines
 
-AppSec Framework can orchestrate Nuclei, ZAP and Semgrep/opengrep. It does not
-reimplement what they do, and it does not believe what they say.
+AppSec Framework can orchestrate Nuclei, ZAP and a source analyser (opengrep or
+Semgrep). It does not reimplement what they do, and it does not believe what they
+say.
 
 ## What AppSec Framework does and does not do
 
@@ -18,6 +19,31 @@ reimplement what they do, and it does not believe what they say.
 `unassessed`, which has no rank and cannot satisfy a policy threshold. An engine
 saying `critical` is that engine's opinion of its own rule. Two engines agreeing
 is not verification.
+
+## Validation status
+
+There are three integrations. The source-analysis one accepts two different
+binaries, and only one of them has been run.
+
+| Integration | Binary | Status | Version exercised |
+|---|---|---|---|
+| Nuclei | `nuclei` | **real binary validated** — argv accepted, real output parsed | v3.11.1 |
+| ZAP | `zap.sh` | **real binary validated** — detected, version parsed, confined to its workspace | 2.17.0 |
+| Source analysis | `opengrep` | **real binary validated** — argv accepted, real output parsed | v1.29.0 |
+| Source analysis | `semgrep` | **integration support only — never executed** | none |
+
+"Real binary validated" means an automated test ran that binary and asserted the
+result: `internal/scanner/integration_test.go`, which skips when the binary is
+absent so ordinary CI stays deterministic.
+
+**Semgrep has never been run.** Its argument vector was written from Semgrep's
+documented CLI and no test has ever executed it. That is precisely the condition
+that left the opengrep integration broken for an entire milestone — it was
+assumed to share Semgrep's flags, it does not, and every opengrep run exited 2
+until a real binary was tried. Treat Semgrep support as untested code, prefer
+opengrep, and please report what happens if you run Semgrep.
+
+No compatibility is claimed for versions other than those above.
 
 ## Installing
 

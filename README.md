@@ -27,11 +27,12 @@ contributors to the ledger rather than the headline: see
 [product validation gate](docs/evaluation/product-validation-gate.md) for the evidence
 behind it.
 
-**Status: v0.x, release candidate.** All three external engines are proven against real
-binaries (Nuclei v3.11.1, opengrep v1.29.0, ZAP 2.17.0), both reference applications are
-assessed while running in CI, and the pre-1.0 blockers from the
-[validation gate](docs/evaluation/product-validation-gate.md) are closed. Schemas may still
-change before 1.0. See
+**Status: v0.x.** All three engine integrations have been exercised against real binaries —
+Nuclei v3.11.1, ZAP 2.17.0 and opengrep v1.29.0. **Semgrep itself has never been executed**;
+the source-analysis integration accepts either binary and only opengrep has been run, so
+treat Semgrep support as untested code
+([details](docs/engines/README.md#validation-status)). Both reference applications are
+assessed while running in CI. Schemas may change before 1.0. See
 [What AppSec Framework does not do yet](#what-appsec-framework-does-not-do-yet) before
 relying on it. It has not been evaluated for precision or recall against a corpus of real
 applications, so no detection-quality claim is made.
@@ -81,8 +82,17 @@ ships that, in Go, under Apache-2.0. Our reasoning is in
 
 ## Install
 
+Requires Go 1.27 or newer.
+
 ```bash
+# The latest published release.
 go install github.com/jaylordibe/application-security-framework/cmd/appsec@latest
+
+# A specific release, which is what to pin in CI.
+go install github.com/jaylordibe/application-security-framework/cmd/appsec@v0.1.0
+
+# The development branch, which may be ahead of any release.
+go install github.com/jaylordibe/application-security-framework/cmd/appsec@main
 ```
 
 Or build from source:
@@ -93,8 +103,18 @@ cd application-security-framework
 make build      # produces ./dist/appsec
 ```
 
+Check what you installed:
+
+```bash
+appsec version
+```
+
 AppSec Framework is a single static binary. No runtime, no database, no account, no cloud
 service.
+
+**Platforms.** Built and tested by CI on Linux, macOS and Windows (`go test` and
+`go test -race` on all three). The reference-application and real-engine validation runs
+on Linux only, so behaviour with external engines is best evidenced there.
 
 ---
 
@@ -198,17 +218,34 @@ reporting the resulting sweep of denials as a clean result.
 
 With **two** identities and a resource you know one of them owns, it will test whether the
 other can reach it — broken object-level authorization, the largest class of real API
-findings:
+findings. Both parts belong in the same file:
 
 ```yaml
+identities:
+  - id: alice
+    authentication:
+      type: bearer
+      credential:
+        env: APPSEC_ALICE_TOKEN
+  - id: bob                           # the non-owner; a second identity is required
+    authentication:
+      type: bearer
+      credential:
+        env: APPSEC_BOB_TOKEN
+
 resources:
   - id: order-alice
     type: order
-    owner: alice
+    owner: alice                      # must be one of the identities[].id above
     crossOwnerAccess: denied          # required; "allowed" for shared resources
     values:
       orderId: "abc123"               # fills GET /api/orders/{orderId}
 ```
+
+A fixture applies only to operations that actually name the object — one with a path
+parameter this fixture can fill. It is never applied to a collection or a health endpoint,
+because two identities receiving the same response from `/health` says nothing about
+ownership.
 
 A fixture also makes a parameterised operation testable at all. Without one,
 `/api/orders/{orderId}` can only be probed by inventing an identifier, and the resulting
@@ -247,6 +284,24 @@ The ledger is the deliverable:
 That fourth row is the one that matters. If `GET /api/orders/{id}` returns 404 because the
 database is empty, the endpoint was **not** meaningfully security-tested — and most tools
 would count it as covered.
+
+### Where the output goes
+
+Each run writes one directory under `.appsec/`, created `0700` with files `0600`:
+
+```
+.appsec/runs/20260907T025905Z-23923611/
+  report.json      the full assessment, including the coverage ledger
+  report.sarif     SARIF 2.1.0, for code-scanning tools
+  meta.json        what produced this run
+  evidence/        the exchanges behind each finding, content-addressed
+  fingerprint.key  per-run key for correlating redacted values; never leaves the directory
+```
+
+Runs are append-only and independent: nothing is read back from a previous run, so a stale
+directory cannot influence a new assessment. **It is safe to delete `.appsec/` at any
+time**, and it is gitignored by default — do not commit it, because evidence can contain
+whatever your target returned.
 
 ---
 
@@ -447,6 +502,7 @@ authentication bypass — a silent pass is the worst possible default for a secu
 | [Product validation gate](docs/evaluation/product-validation-gate.md) | does this justify its complexity? evidence, and a REPOSITION recommendation |
 | [Discovery on real applications](docs/evaluation/discovery-on-reference-applications.md) | what M5 finds on the reference apps, and why that is mostly nothing |
 | [ADR-0017: the reposition](docs/adr/0017-reposition-to-coverage-and-verification.md) | why the ledger is the product and authorization is a contributor |
+| [Releasing](docs/releases/README.md) | how a release is cut, and why no binaries are published |
 | [ADRs](docs/adr/) | consequential decisions and their alternatives |
 | [Roadmap](docs/roadmap.md) | what is next, and what is explicitly out |
 

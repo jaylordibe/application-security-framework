@@ -40,9 +40,11 @@ This binary links the following, each under its own licence. Run
 NO BUNDLED SECURITY ENGINES
 
 AppSec Framework bundles no external security engine and downloads none at
-runtime. Where it can invoke ZAP, Nuclei, Semgrep, opengrep or Hadrian, those are
-separate programs that the operator installs, running as separate processes under
-their own licences.
+runtime. It can invoke ZAP, Nuclei and a source analyser (opengrep or Semgrep);
+those are separate programs that the operator installs, running as separate
+processes under their own licences. Hadrian is named in `appsec doctor` as a tool
+that would cover authorization testing, and is reported there as not integrated:
+no code in this project invokes it.
 
 Semgrep's registry rules are licensed under the Semgrep Rules License v1.0, which
 permits use only for the user's own internal business purposes and forbids

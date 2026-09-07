@@ -6,7 +6,12 @@ All notable changes to this project are documented here. The format follows
 schemas may change between minor versions. Each schema carries its own version string so a
 consumer can detect a change rather than misparse.
 
-## [Unreleased]
+## [0.1.0] — unreleased
+
+First public release. Everything below is in it: there is no earlier published version, so
+this section is the whole history rather than a delta. Release notes written for users
+rather than contributors are in
+[docs/releases/v0.1.0.md](docs/releases/v0.1.0.md).
 
 ### Added
 

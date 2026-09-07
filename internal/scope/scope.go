@@ -162,10 +162,17 @@ func (p *Policy) CheckURL(raw string) Decision {
 		return Decision{false, err.Error()}
 	}
 
+	// Why an entry did not match is tracked, so a refusal can say what actually
+	// failed. Reporting "host is not in scope" when the host matched and the
+	// port did not sends an operator looking in the wrong place entirely — and
+	// scope refusals are the messages people hit first, on their own machine,
+	// against a target they can see is running.
+	var hostMatched bool
 	for _, e := range p.entries {
 		if !hostMatches(e.Host, host) {
 			continue
 		}
+		hostMatched = true
 		if e.Scheme != "" && e.Scheme != u.Scheme {
 			continue
 		}
@@ -178,7 +185,13 @@ func (p *Policy) CheckURL(raw string) Decision {
 		return Decision{true, fmt.Sprintf("matched scope entry %s", e.String())}
 	}
 	p.record(host)
-	return Decision{false, fmt.Sprintf("host %q is not in scope", host)}
+	if hostMatched {
+		return Decision{false, fmt.Sprintf(
+			"%s://%s:%d is not in scope: the host is allowed but this scheme, port or path is "+
+				"not. In scope: %s", u.Scheme, host, port, strings.Join(p.EntryStrings(), ", "))}
+	}
+	return Decision{false, fmt.Sprintf("host %q is not in scope. In scope: %s",
+		host, strings.Join(p.EntryStrings(), ", "))}
 }
 
 // CheckAddr evaluates a resolved IP address.

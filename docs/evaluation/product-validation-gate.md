@@ -405,7 +405,8 @@ but they are second, not first, and they are where Hadrian is strongest.
 **Required before 1.0** — all evidence-derived:
 
 1. The path-identity defect class closed wherever operation identity is compared.
-2. ZAP and Semgrep/opengrep proven against real binaries (Nuclei now is).
+2. ZAP and the source analyser proven against real binaries (Nuclei now is).
+   *Closed for opengrep; **Semgrep itself remains unexecuted**.*
 3. At least one reference application with a real ownership boundary, running,
    with a demonstrated true positive and a demonstrated true negative.
 4. Stable configuration and report contracts, with the two config-authoring traps
@@ -464,8 +465,10 @@ original seven.
 | 12 | **Rule ids carried the operator's local paths.** Both SAST engines rename a rule loaded from a local file to include that path, so a rule id embedded the directory layout and changed between runs whenever the rules directory was temporary — breaking deduplication and reproducibility. | Medium | Fixed: `--no-rewrite-rule-ids` for both. |
 | 13 | **Source analysis required the `verification` profile** while making no request to the target at all, so the safest engine was unavailable at the safest profile. | Low | Fixed: it requires `discovery`. |
 
-**All three engines now run against real binaries** — Nuclei v3.11.1, opengrep v1.29.0,
-ZAP 2.17.0 — closing the validation gap M4 shipped with. Two of the three integrations
+**All three integrations now run against real binaries** — Nuclei v3.11.1, ZAP 2.17.0 and
+opengrep v1.29.0 — closing the validation gap M4 shipped with. The source-analysis
+integration accepts either opengrep or Semgrep and **only opengrep has been executed**;
+Semgrep support is untested code. Two of the three integrations
 were broken, and neither failure was reachable from a fixture.
 
 **Both reference applications are now assessed while running**, by

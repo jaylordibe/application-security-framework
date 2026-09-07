@@ -3,6 +3,7 @@ package scope
 import (
 	"fmt"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -222,5 +223,49 @@ func TestConcurrentCheckURLIsSafe(t *testing.T) {
 	wg.Wait()
 	if got := len(p.OutOfScopeHosts()); got != 16*200 {
 		t.Errorf("recorded %d out-of-scope hosts, want %d", got, 16*200)
+	}
+}
+
+// A refusal must name what actually failed.
+//
+// Reporting "host is not in scope" when the host matched and the port did not
+// sends an operator looking in the wrong place — and scope refusals are the
+// first messages anyone hits, on their own machine, against a target they can
+// see is running. Found during the release readiness gate.
+func TestRefusalSaysWhatActuallyFailed(t *testing.T) {
+	p, err := New([]Entry{{Host: "127.0.0.1", Ports: []int{9}}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Same host, different port: the port is the problem.
+	d := p.CheckURL("http://127.0.0.1:8771/openapi.json")
+	if d.Allowed {
+		t.Fatal("a port outside the scope entry was allowed")
+	}
+	if !strings.Contains(d.Reason, "the host is allowed but this scheme, port or path is not") {
+		t.Errorf("a port mismatch was reported as a host mismatch: %q", d.Reason)
+	}
+	if !strings.Contains(d.Reason, "8771") {
+		t.Errorf("the refusal does not name the port that was refused: %q", d.Reason)
+	}
+
+	// A genuinely different host still says so.
+	d = p.CheckURL("http://example.test:9/x")
+	if d.Allowed {
+		t.Fatal("an out-of-scope host was allowed")
+	}
+	if !strings.Contains(d.Reason, `host "example.test" is not in scope`) {
+		t.Errorf("a host mismatch was not reported as one: %q", d.Reason)
+	}
+
+	// Both forms tell the operator what IS in scope, so the fix is obvious.
+	for _, r := range []string{
+		p.CheckURL("http://127.0.0.1:8771/").Reason,
+		p.CheckURL("http://example.test:9/").Reason,
+	} {
+		if !strings.Contains(r, "In scope:") {
+			t.Errorf("the refusal does not say what is in scope: %q", r)
+		}
 	}
 }

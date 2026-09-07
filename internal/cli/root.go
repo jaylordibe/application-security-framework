@@ -9,9 +9,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version is set at build time via -ldflags.
-var Version = "0.0.0-dev"
-
 // Execute runs the CLI and returns a process exit code.
 func Execute(args []string, stdout, stderr io.Writer) int {
 	root := &cobra.Command{
@@ -28,7 +25,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 			"and the report always says how many that was, out of how many it saw.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Version:       Version,
+		Version:       resolveVersion(),
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -37,6 +34,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 	root.AddCommand(newScanCommand(stdout, stderr))
 	root.AddCommand(newInitCommand(stdout, stderr))
 	root.AddCommand(newDoctorCommand(stdout, stderr))
+	root.AddCommand(newVersionCommand(stdout))
 
 	if err := root.Execute(); err != nil {
 		var coded *exitError

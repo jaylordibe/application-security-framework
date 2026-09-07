@@ -78,18 +78,49 @@ jobs:
         # itself never does this: installing an engine is the operator's act,
         # and here CI is the operator.
         run: go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.11.1
+
+      - name: install opengrep
+        # Pinned to the version the documentation claims was validated. The two
+        # source analysers do not share a command line, and assuming they did
+        # left this integration broken for an entire milestone — so the claim
+        # "real binary validated" has to be reproducible here.
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/opengrep" \
+            https://github.com/opengrep/opengrep/releases/download/v1.29.0/opengrep_manylinux_x86
+          chmod +x "$RUNNER_TEMP/opengrep"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: install ZAP
+        # ZAP needs a JVM, which the runner already has. Its launcher is a shell
+        # script that finds java through JAVA_HOME and PATH; giving it neither is
+        # how ZAP went undetected for a milestone.
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/zap.zip" \
+            https://github.com/zaproxy/zaproxy/releases/download/v2.17.0/ZAP_2.17.0_Core.zip
+          unzip -q "$RUNNER_TEMP/zap.zip" -d "$RUNNER_TEMP/zap"
+          chmod +x "$RUNNER_TEMP/zap/ZAP_2.17.0/zap.sh"
+          echo "$RUNNER_TEMP/zap/ZAP_2.17.0" >> "$GITHUB_PATH"
       - name: integration tests
-        # A skip here would be a green tick for having run nothing, which is
-        # the failure mode this whole milestone is about. The point of
-        # installing Nuclei is that its test must not skip.
+        # A skip here would be a green tick for having run nothing, which is the
+        # failure mode this job exists to prevent. Every engine that was just
+        # installed must actually be exercised.
+        #
+        # Semgrep is deliberately absent: its integration has never been executed
+        # and the documentation says so. Installing it here would turn an honest
+        # "untested" into a claim nobody has checked.
         run: |
           # Without pipefail the pipe would return tee's status and a failing
           # test would report success.
           set -o pipefail
-          go test -v -count=1 -run 'TestNucleiFindsAPlantedMarker' ./internal/scanner/ | tee out.txt
-          if grep -q "^--- SKIP: TestNucleiFindsAPlantedMarker" out.txt; then
-            echo "::error::Nuclei was installed but its integration test skipped"; exit 1
-          fi
+          go test -v -count=1 -run 'FindsAPlantedMarker|ZAPIsDetected' ./internal/scanner/ \
+            | tee out.txt
+          for name in TestNucleiFindsAPlantedMarker TestSASTFindsAPlantedMarker \
+                      TestZAPIsDetectedAndInvokedIntoItsOwnHome; do
+            if grep -q "^--- SKIP: $name" out.txt; then
+              echo "::error::$name skipped although its engine was installed"
+              exit 1
+            fi
+          done
 
   quality:
     name: format, vet, static analysis

@@ -11,8 +11,8 @@ treated accordingly: see [docs/security/threat-model.md](docs/security/threat-mo
 Report privately through GitHub's advisory workflow:
 <https://github.com/jaylordibe/application-security-framework/security/advisories/new>
 
-Please include the version (`appsec --version`), your platform, a minimal reproduction, and
-what you believe the impact is. If you cannot use GitHub advisories, open a public issue
+Please include the output of `appsec version` — which reports the build, Go toolchain,
+platform and schema versions — a minimal reproduction, and what you believe the impact is. If you cannot use GitHub advisories, open a public issue
 containing **only** a request for a private contact channel and no details.
 
 We aim to acknowledge within 7 days. There is no bug bounty.
