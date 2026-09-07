@@ -7,6 +7,14 @@ foundation" cannot be mistaken for "we shipped a security product".
 Ordering principle: **each milestone must make an existing honest limitation
 disappear.** A milestone that adds surface without removing a limitation is deferred.
 
+> **Repositioned 2026-09-07.** A [product validation gate](evaluation/product-validation-gate.md)
+> measured this project against two live reference applications, a real Nuclei binary and a
+> refreshed ecosystem review. The coverage ledger is now the product and native
+> authorization checking is a contributor to it, because the authorization differentiator
+> is contested by [Hadrian](https://github.com/praetorian-inc/hadrian) and coverage
+> accounting is not contested by anything. No code was removed; the claims and the build
+> order changed. See [ADR-0017](adr/0017-reposition-to-coverage-and-verification.md).
+
 ---
 
 ## Done — M0: Foundation
@@ -183,7 +191,7 @@ See threat model T-18.
 
 ---
 
-## Done (partial) — M4: External engines
+## Done — M4: External engines
 
 **Removes the limitation:** whole weakness classes were listed in
 `classesNotAssessed` with nothing able to address them, because this project
@@ -236,7 +244,23 @@ preferred when both are installed, on evidence: Semgrep's metrics default to
 registry rules are licensed for internal use only — which is why this repository
 already has a CI check forbidding references to them.
 
-### Why this milestone is partial
+### It was partial until M6, and what closing that found
+
+M4 shipped with an explicit gap: **no engine had ever been executed against a real
+binary**, because none was installed in the environment it was built in, and installing one
+would have been what §33 forbids the tool from doing. M6 closed that with pinned
+installations — Nuclei v3.11.1, opengrep v1.29.0, ZAP 2.17.0 — and all three integration
+tests now run rather than skip.
+
+Two of the three integrations were broken, and neither could have been caught by a fixture:
+opengrep rejected `--metrics` and four other flags M4 assumed it shared with Semgrep, so
+the preferred engine could never run; and ZAP's version probe was given an empty
+environment, so its launcher could not find a JVM and ZAP could never be detected. A third
+defect had ZAP reporting the JVM's version as its own. All are fixed and pinned by tests;
+the full account is in the M6 section below.
+
+The text below is the original statement of the gap, kept because a roadmap that edits away
+its own admissions is not a roadmap.
 
 **No engine was executed against a real binary.** None of Nuclei, ZAP or
 Semgrep/opengrep is installed in the environment this was built in, and
@@ -345,12 +369,98 @@ JavaScript, and neither could be started without installing dependencies.
 
 ---
 
+## Done — M6: Evaluation hardening
+
+**Removes the limitation:** the evaluation corpus is synthetic, and it hides real defects.
+
+This is not a new security dimension, and choosing it over one was the point of the
+[product validation gate](evaluation/product-validation-gate.md). That gate spent two days
+pointing the tool at two live reference applications and one real engine, and found
+**seven defects, none of them findable from the 82-scenario corpus that was passing
+throughout**:
+
+| | Defect | Why the corpus missed it |
+|---|---|---|
+| 1 | Adapter facts never matched a real specification — OpenAPI paths are relative to `servers[].url`, adapters speak in application-absolute paths. All 40 facts missed; M5 then re-added them, inflating the surface from 38 to 78 duplicates. | Every fixture specification omitted `servers` |
+| 2 | **Fourteen confirmed high false positives**: an ownership fixture applied to `GET /api/health/liveness`, `/api/enums`, `/api/roles` — operations naming no object. Exit 1. Precision 0/14. | No fixture application had parameterless operations alongside a fixture |
+| 3 | Nuclei's `extracted-results` imported as evidence; on a real target it held a live `api_session` cookie | Fake engines emitted benign extractor output |
+| 4 | The terminal said nothing about an identity the target had rejected | Assertions read the JSON report, never the terminal |
+| 5 | Engines wrote `.nuclei-config/` into the operator's working directory | Fake engines do not look for a home directory |
+| 6 | `appsec scan http://localhost:3000` aborted against a running target — `localhost` resolves to `::1` first and most Node servers bind IPv4 only | Test servers are reached by explicit IP |
+| 7 | The `doctor` test depended on ambient `PATH`, passing only where no engine was installed | No engine was ever installed |
+
+Two of those were critical: one made the adapter worse than useless on a real
+specification, and one made the headline authorization check fail a build with findings
+that were all wrong.
+
+| Task | Acceptance criteria | Delivered |
+|---|---|---|
+| Reference applications in CI | Both reference applications brought up and assessed as part of the evaluation harness, not read as source. | ✅ `evals/reference_test.go` asserts six invariants against a running application and skips without `APPSEC_REFERENCE_TARGET`, so a contributor pays nothing. `.github/workflows/reference-apps.yml` boots both applications weekly and on demand. Verified live against both: `laravel-api` 38 operations / 11 executed, `nestjs-api` 84 / 10. |
+| Path identity | The distinction covered wherever operation identity is compared. | ✅ `Operation.MatchesID` accepts both spellings and is used at all three operator-facing sites. It closed a **fail-open**: `assessment.excludeOperations` silently did not match against any specification with a server base path, so an operation the operator forbade was exercised. |
+| Fixture applicability | Corpus cases pairing an ownership fixture with collection, health and enumeration endpoints. | ✅ `Fixture.Addresses` plus a test built from the exact operations that produced the fourteen false positives. |
+| Terminal output | Every assurance-relevant fact asserted against the terminal as well as the JSON. | ✅ Rejected identities, unusable identities and failed components now appear in the summary, each with a test. The reference harness asserts the terminal counters agree with the ledger. |
+| Real engines | ZAP and Semgrep/opengrep proven against real binaries as Nuclei is. | ✅ All three. Nuclei v3.11.1, opengrep v1.29.0, ZAP 2.17.0 — see below. |
+
+### What running the real engines found
+
+M4 shipped ZAP and Semgrep/opengrep integrations that had never been executed. Both were
+broken, in ways no fixture could have shown:
+
+- **opengrep could never have run.** M4 recorded that supporting the fork "cost a name in a
+  list" because it shares Semgrep's CLI. It does not: it rejects `--metrics` outright — it
+  removed telemetry rather than making it configurable — and has no `--output`,
+  `--disable-version-check`, `--quiet`, `--timeout` or `--max-target-bytes`. Every run with
+  the *preferred* engine exited 2 with `unknown option '--metrics'`.
+- **ZAP could never have been detected.** Its version probe was given an empty environment,
+  and `zap.sh` is a launcher script that needs `JAVA_HOME` and `PATH` to find a JVM. It
+  exited 1, which this repository reported as "not installed".
+- **ZAP's version was the JVM's.** `zap.sh` prints `Found Java version 21.0.2` before its
+  own `2.17.0`, and the parser took the first version-shaped token — so a report would have
+  named the wrong version of the tool that produced the finding.
+- **Rule identities carried local paths.** Both engines rename a rule loaded from a local
+  file to include that file's path, so a rule id embedded the operator's directory layout
+  and changed between runs whenever the rules directory was temporary. That breaks
+  deduplication and the reproducibility this project claims.
+- **Source analysis required the wrong profile.** It demanded `verification` while making
+  no request to the target at all, so the safest engine was unavailable at the safest
+  profile.
+
+**Explicitly out of scope, and still are:** tenancy, roles and permissions, workflow,
+environment provisioning, runtime adapters. Tenancy and roles are real boundaries in `nestjs-api` — 9 roles, 41
+scoped permissions, tenancy on three subjects — and they are exactly where the competitor
+is strongest. Building them on a corpus that just missed a fourteen-false-positive defect
+would produce more confident wrongness.
+
+---
+
 ## Later
 
-Tenancy and cross-scope isolation; workflow and state-transition testing; environment
-provisioning; CI policy and suppressions with expiry; assessment comparison and regression
-detection; HTML reporting; the dashboard; optional provider-neutral AI restricted to
-proposing hypotheses that deterministic verification must then confirm or reject.
+Reordered by [ADR-0017](adr/0017-reposition-to-coverage-and-verification.md), which made
+the coverage ledger the product and demoted authorization to a contributor.
+
+**Nearer, because they deepen the ledger:**
+
+- **Fixture and environment orchestration.** The measured burden today is 33 configuration
+  lines and six manual steps AppSec cannot perform — including editing the database
+  directly — ending in a hand-copied UUID that goes stale on the next reset. Hadrian
+  creates fixtures dynamically. This is the largest proven obstacle to using the
+  authorization checks at all.
+- **Assessment comparison and regression detection.** A ledger that can be compared
+  between runs is worth more than a ledger that cannot, and reproducibility is already
+  established: three identical runs produce an identical coverage hash.
+- **CI policy and suppressions with expiry**, once comparison exists.
+
+**Further out, and now contested ground:**
+
+- **Tenancy and cross-scope isolation**, and **roles / function-level authorization.**
+  Both are real and both are unbuilt. Both are where Hadrian is strongest, so neither is
+  worth entering until the ledger advantage is consolidated and the evaluation method is
+  trustworthy.
+- **Workflow and state-transition testing.**
+
+**No evidence found for, and not 1.0 blockers:** HTML reporting; the dashboard; optional
+provider-neutral AI restricted to proposing hypotheses that deterministic verification must
+then confirm or reject.
 
 ---
 
@@ -379,3 +489,48 @@ Stated in advance, so it is harder to rationalise away later:
 - If Hadrian, Akto or ZAP ship provenance-carrying oracle derivation and coverage
   accounting, the differentiator is gone and contributing upstream becomes the better
   use of everyone's time.
+
+### Both were tested on 2026-09-07. Here is what happened.
+
+Writing a stop condition is easy; the test is what you do when it fires.
+
+**The first condition fired, and it was a defect rather than the approach.** The first
+cross-owner run against a live application produced **fourteen confirmed high-severity
+findings, every one of them false**, and exited non-zero. Any developer seeing that would
+have disabled the check immediately, and would have been right to.
+
+The cause was a fixture-applicability rule, not the oracle: a fixture applied wherever it
+could *bind*, and an operation with no path parameters binds trivially, so a device-token
+fixture reached `GET /api/health/liveness`. Fixed, pinned by a test built from the exact
+operations that failed, and the same run now reports no findings and one boundary checked.
+The oracle itself reached the correct verdict on the real boundary, with the owner
+reachability and liveness controls intact.
+
+So the condition is **not** met — but it came far closer than the eighty-two passing
+evaluation scenarios suggested, and that is why the next milestone is evaluation hardening
+rather than a new feature.
+
+**The second condition is half met, and that half decided the reposition.**
+[Hadrian](https://github.com/praetorian-inc/hadrian) (Apache-2.0) now ships BOLA *and*
+BFLA/roles, mutation verification by state observation, dynamic fixture creation, and
+REST/GraphQL/gRPC. That is the authorization differentiator, gone.
+
+It has **not** shipped coverage accounting, and neither has anything else found in the
+2026 ecosystem review: the idea is now widely argued as best practice and still appears
+unimplemented outside commercial platforms.
+
+Half a condition does not mean half a shutdown. It means the surviving half is the
+product, which is what
+[ADR-0017](adr/0017-reposition-to-coverage-and-verification.md) records.
+
+### The condition that replaces the first one
+
+Now that the ledger is the product, the honest stop condition changes with it:
+
+- **If a mature tool ships a machine-readable per-endpoint tested / blocked / untested
+  account with causes**, the remaining differentiator is gone and contributing upstream
+  becomes the better use of everyone's time.
+- **If the ledger cannot be made trustworthy** — if evaluation hardening keeps surfacing
+  defects of the severity found in the validation gate — then this tool is producing
+  confident accounts of its own coverage that are wrong, which is worse than producing
+  nothing.

@@ -1,17 +1,23 @@
 # Architecture
 
-Status: the M0 foundation is implemented and tested; everything beyond it is design only.
-This document describes the intended shape of the system and marks clearly what exists
-today. See `docs/roadmap.md` for what is next and `README.md` for the honest list of what
-AppSec Framework cannot yet do.
+Status: M0–M5 are implemented and tested. This document describes the shape of the system
+and marks clearly what exists today. See `docs/roadmap.md` for what is next and `README.md`
+for the honest list of what AppSec Framework cannot yet do.
 
 ---
 
 ## 1. The one-sentence version
 
-AppSec Framework derives an **expectation** of how an application should behave from the
-application's own metadata, observes how it **actually** behaves, and reports the
-difference — together with an honest account of everything it could not test.
+AppSec Framework produces an **account** of an assessment — what was tested, what was
+blocked, what was never attempted, and why — and holds every contributor to it, its own
+checks included, to evidence rather than to assertion.
+
+It does that by deriving an **expectation** of how an application should behave from the
+application's own metadata, observing how it **actually** behaves, and reporting the
+difference. That machinery is unchanged by
+[ADR-0017](adr/0017-reposition-to-coverage-and-verification.md); what changed is which end
+of it is the product. The ledger is the deliverable, and the expectation is one of the
+things that makes a row in it meaningful.
 
 ---
 

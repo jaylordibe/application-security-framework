@@ -29,6 +29,14 @@ import (
 	"github.com/jaylordibe/application-security-framework/internal/scanner"
 )
 
+// launcherEnvNames is the entire environment ZAP is given.
+//
+// zap.sh is a launcher script: it locates a JVM and execs it. JAVA_HOME and PATH
+// are how it does that, and TMPDIR is where the JVM writes scratch files. It gets
+// these three and nothing else — not the assessment's credentials, not the
+// operator's shell.
+var launcherEnvNames = []string{"JAVA_HOME", "PATH", "TMPDIR"}
+
 // binaryName is what is looked up on PATH when no explicit path is configured.
 const binaryName = "zap.sh"
 
@@ -105,7 +113,17 @@ func (Engine) Detect(ctx context.Context, s scanner.Settings) scanner.Availabili
 		// ZAP is a JVM launcher and needs a home directory to write its
 		// configuration into. It is given one explicitly at run time; the
 		// version probe needs nothing.
-		Env:       []string{},
+		// The probe gets the same environment the scan declares.
+		//
+		// zap.sh is a shell script whose first job is to locate a JVM, so with
+		// no environment at all it cannot find java and exits 1 — which this
+		// package then reported as "the version probe failed", i.e. as ZAP not
+		// being installed. Detection could therefore never succeed on a normal
+		// installation, and ZAP has never once been exercised as a result.
+		//
+		// The names are a package constant, never operator input, so nothing
+		// here can be pointed at a credential.
+		Env:       proc.MinimalEnv(launcherEnvNames, nil),
 		Timeout:   scanner.DefaultVersionTimeout,
 		MaxStdout: 64 << 10,
 		MaxStderr: 64 << 10,
@@ -147,17 +165,49 @@ func resolve(configured string) (string, error) {
 }
 
 // parseVersion pulls a version out of ZAP's banner.
+// parseVersion extracts ZAP's own version from its launcher output.
+//
+// zap.sh is a shell script that talks about the JVM before it starts it:
+//
+//	Found Java version 21.0.2
+//	Available memory: 36864 MB
+//	Using JVM args: -Xmx9216m
+//	2.17.0
+//
+// Taking the first version-shaped token found "21.0.2" and recorded the JVM as
+// the engine. A report that names the wrong version of the tool that produced a
+// finding is a provenance failure, and provenance is most of what this project
+// claims to add over running the scanner directly.
+//
+// ZAP prints its own version as a line containing nothing else, which the
+// launcher's chatter never does, so that is what is matched — and the last such
+// line wins, because the version is the last thing printed.
 func parseVersion(out string) string {
-	for _, field := range strings.Fields(proc.Sanitize(out, 4096)) {
-		trimmed := strings.TrimPrefix(field, "v")
-		if trimmed == "" || !strings.Contains(trimmed, ".") {
+	// Split before sanitizing: Sanitize folds newlines into spaces, and "a line
+	// containing nothing but the version" is the whole signal here.
+	var found string
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(proc.Sanitize(raw, 256))
+		if line == "" {
 			continue
 		}
-		if _, err := strconv.Atoi(strings.SplitN(trimmed, ".", 2)[0]); err == nil {
-			return field
+		if v, ok := versionToken(line); ok {
+			found = v
 		}
 	}
-	return ""
+	return found
+}
+
+// versionToken reports whether a token is a bare version number.
+func versionToken(field string) (string, bool) {
+	trimmed := strings.TrimPrefix(field, "v")
+	if trimmed == "" || !strings.Contains(trimmed, ".") {
+		return "", false
+	}
+	if _, err := strconv.Atoi(strings.SplitN(trimmed, ".", 2)[0]); err != nil {
+		return "", false
+	}
+	return field, true
 }
 
 // Invocation builds the argument vector.
@@ -199,7 +249,7 @@ func (Engine) Invocation(
 		// ZAP is a JVM launcher: it needs to find a Java runtime and a writable
 		// temporary directory. These are named explicitly, and everything else
 		// — including this tool's identity credentials — is absent.
-		EnvNames: []string{"JAVA_HOME", "PATH", "TMPDIR"},
+		EnvNames: launcherEnvNames,
 		Provenance: scanner.Provenance{
 			Engine:         "zap",
 			Version:        a.Version,

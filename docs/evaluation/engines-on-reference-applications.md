@@ -4,7 +4,14 @@ What M4's engine boundary actually did when it was run, and — the more importa
 half — what it did **not** do, because none of the three engines is installed in
 the environment this was evaluated in.
 
-**M4 is partial.** The boundary is implemented, hardened and tested. Nuclei, ZAP
+> **Superseded in part, 2026-09-07.** The gap this document records — no engine ever
+> executed against a real binary — was closed during the release gate. Nuclei v3.11.1,
+> opengrep v1.29.0 and ZAP 2.17.0 all now run in the integration suite, and doing so found
+> that two of the three integrations were broken. See the
+> [product validation gate](product-validation-gate.md) and the M6 section of the roadmap.
+> Everything below describes the state before that, and is kept as written.
+
+**M4 was partial.** The boundary is implemented, hardened and tested. Nuclei, ZAP
 and Semgrep/opengrep were each **blocked as unavailable**, so no assessment in
 this document was produced by a real external engine, and none is presented as
 though it were.

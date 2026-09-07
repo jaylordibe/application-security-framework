@@ -127,3 +127,61 @@ func TestCapturedResponseHeaderLookupIsCaseInsensitive(t *testing.T) {
 		t.Error("missing header returned a value")
 	}
 }
+
+// An operation has two true paths and an operator only ever sees one of them.
+//
+// OpenAPI defines the template relative to the document's server URL, so a
+// document with servers:[{url:".../api"}] spells a route "/orders" while the
+// framework's route list, the browser and the access log all say "/api/orders".
+// Matching only the specification's spelling made assessment.excludeOperations
+// fail open: an operation the operator explicitly forbade was exercised.
+func TestOperationMatchesBothSpellingsOfItsPath(t *testing.T) {
+	op := Operation{
+		ID:           OperationID("DELETE", "/users/{userId}"),
+		Method:       "DELETE",
+		PathTemplate: "/users/{userId}",
+		BaseURL:      "http://localhost:8000/api",
+	}
+
+	for _, spelling := range []string{
+		"DELETE /users/{userId}",     // as the specification declares it
+		"DELETE /api/users/{userId}", // as the application serves it
+		" DELETE /api/users/{userId} ",
+	} {
+		if !op.MatchesID(spelling) {
+			t.Errorf("operator identifier %q did not match; an exclusion written this way "+
+				"would silently fail open", spelling)
+		}
+	}
+
+	for _, wrong := range []string{
+		"", "DELETE /users", "GET /api/users/{userId}", "DELETE /api/api/users/{userId}",
+		"DELETE /other/{userId}",
+	} {
+		if op.MatchesID(wrong) {
+			t.Errorf("identifier %q matched an operation it does not name", wrong)
+		}
+	}
+
+	if !op.MatchesAnyID([]string{"GET /health", "DELETE /api/users/{userId}"}) {
+		t.Error("MatchesAnyID missed a match in a list")
+	}
+	if op.MatchesAnyID([]string{"GET /health"}) {
+		t.Error("MatchesAnyID matched a list containing no match")
+	}
+}
+
+// With no server base path the two spellings coincide, and nothing extra is
+// accepted.
+func TestOperationWithNoBasePathMatchesOnlyItself(t *testing.T) {
+	op := Operation{
+		ID: OperationID("GET", "/orders"), Method: "GET", PathTemplate: "/orders",
+		BaseURL: "http://localhost:3000",
+	}
+	if !op.MatchesID("GET /orders") {
+		t.Error("an operation did not match its own identifier")
+	}
+	if op.MatchesID("GET /api/orders") {
+		t.Error("an operation matched a path it is not served at")
+	}
+}

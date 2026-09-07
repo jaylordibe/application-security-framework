@@ -206,6 +206,82 @@ consumer can detect a change rather than misparse.
 - The CI check forbidding Semgrep registry rule packs matched the code that refuses them.
   A mention must now be annotated as a refusal; anything else still fails.
 
+### Fixed — release gate
+
+Six further defects, found by closing the validation gate's own pre-1.0 list. Two were
+worse than anything in the original seven.
+
+- **`assessment.excludeOperations` failed open.** The control that says "never send this
+  request" was matched against the specification-relative operation id, while an operator
+  reads the running application and writes the path it is served at. Against any document
+  with a `servers` base path the exclusion silently did not match, and the operation was
+  exercised. `model.Operation.MatchesID` now accepts both spellings and is used by the
+  operation planner, the ownership planner and the resource-fixture allowlist. An
+  end-to-end test asserts that no request reaches an excluded operation.
+- **opengrep could never run.** It rejects `--metrics` — it removed telemetry rather than
+  making it configurable — and has no `--output`, `--disable-version-check`, `--quiet`,
+  `--timeout` or `--max-target-bytes`. Every run with the preferred SAST engine exited 2
+  with `unknown option '--metrics'`. The two engines now get different argument vectors,
+  opengrep's verified against its own `scan --help`.
+- **ZAP could never be detected.** Its version probe was given an empty environment, and
+  `zap.sh` needs `JAVA_HOME` and `PATH` to locate a JVM; it exited 1 and AppSec reported
+  ZAP as not installed. The probe now receives the same environment the engine declares for
+  its scan, so detection and execution cannot drift.
+- **ZAP reported the JVM's version as its own** — `zap.sh` prints `Found Java version
+  21.0.2` before `2.17.0`, and the parser took the first version-shaped token. Only a line
+  containing nothing but a version now counts.
+- **Rule ids carried the operator's local paths.** Both SAST engines rename a rule loaded
+  from a local file to include that file's path, so a rule id embedded the operator's
+  directory layout and changed between runs whenever the rules directory was temporary,
+  breaking deduplication and reproducibility. `--no-rewrite-rule-ids` is now passed to both.
+- **Source analysis required the `verification` profile** while making no request to the
+  target at all, so the safest engine was unavailable at the safest profile. It requires
+  `discovery`.
+
+### Added — M6: evaluation hardening
+
+- `evals/reference_test.go`: assessment of a real, running application, asserting six
+  invariants that hold whatever the application is — every operation produces exactly one
+  ledger row; every non-executed row carries a valid cause and an operator-facing reason;
+  confirmed findings carry evidence and observed findings stay unassessed; two runs produce
+  an identical ledger and identical finding identities; the headline counters and the
+  terminal agree with the ledger; and a run that executed nothing says so. It skips without
+  `APPSEC_REFERENCE_TARGET`, so `go test ./...` never depends on a running service.
+- `.github/workflows/reference-apps.yml`: boots both reference applications weekly and on
+  demand, assesses them, and fails if a run leaves artefacts in the working tree.
+- **All three engines now run against real binaries** — Nuclei v3.11.1, opengrep v1.29.0,
+  ZAP 2.17.0 — closing the validation gap M4 shipped with. Two of the three integrations
+  were broken; neither failure was reachable from a fixture.
+- Failed components are stated in the terminal summary, not only in stderr as they happen
+  and in the JSON afterwards. A component that failed did not assess what it was there to
+  assess, and by the end of a run its stderr line has scrolled past.
+
+### Changed — repositioned (ADR-0017)
+
+The product validation gate measured this project against two live reference applications,
+a real Nuclei binary and a refreshed ecosystem review, and the thesis's own priority order
+did not survive. No code was removed; the claims and the build order changed.
+
+- **The coverage ledger is the lead capability.** On a live `nestjs-api`: 84 operations, 10
+  executed, with a machine-readable cause for each of the other 74. Nothing else found in
+  the 2026 ecosystem review implements a per-endpoint tested/blocked/untested account.
+- **Native authorization checking is a contributor rather than the headline.**
+  [Hadrian](https://github.com/praetorian-inc/hadrian) (Apache-2.0) now ships BOLA *and*
+  BFLA/roles, mutation verification by state observation, dynamic fixture creation and
+  REST/GraphQL/gRPC — including two capabilities this project had deferred to future
+  milestones.
+- **Oracle derivation moves from priority 1 to priority 3** in the product thesis. Measured
+  against a running application it changed the operations actually tested from 11 to 11,
+  because the specification was already accurate. It is retained because it is genuinely
+  unoccupied, and demoted because its value has not yet been demonstrated where a
+  specification is silent or wrong outside synthetic fixtures.
+- **M6 is evaluation hardening, not a new security dimension.** Seven defects in two days
+  of real-application use, none findable from the 82-scenario corpus that was passing
+  throughout. Tenancy and roles move to "further out, contested ground".
+- README, product thesis, roadmap, `appsec --help` and the roadmap's stop conditions all
+  updated. The stop conditions were pre-committed and both were approached; the roadmap now
+  records exactly how each resolved rather than quietly restating them.
+
 ### Corrected — product validation gate
 
 Found by running the real Nuclei v3.11.1 and a live `laravel-api` instance, none by review.

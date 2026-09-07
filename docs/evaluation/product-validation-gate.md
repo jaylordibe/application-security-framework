@@ -449,12 +449,46 @@ would be CONTINUE. It is not, so it is not.
 
 ---
 
+## 9a. Release gate — the pre-1.0 blockers, closed
+
+The gate's own pre-1.0 list was worked through afterwards. Doing so found **six more
+defects**, bringing the total to thirteen, and two of them were worse than anything in the
+original seven.
+
+| # | Defect | Severity | Status |
+|---|---|---|---|
+| 8 | **`assessment.excludeOperations` failed open.** The control an operator uses to say "never send this request" is matched against `Operation.ID`, which is the specification-relative path. An operator reads their running application and writes `DELETE /api/users/{userId}`; the id is `DELETE /users/{userId}`; no match, so the operation was exercised. Present in both the operation planner and the ownership planner. | **Critical** — a safety control that fails open | Fixed: `Operation.MatchesID` accepts both spellings, used at all three operator-facing sites. Pinned by an end-to-end test asserting no request reaches the excluded operation. |
+| 9 | **opengrep could never run.** M4 recorded that supporting the fork "cost a name in a list". It rejects `--metrics` outright, and has no `--output`, `--disable-version-check`, `--quiet`, `--timeout` or `--max-target-bytes`. Every run with the *preferred* SAST engine exited 2. | **High** — an integration that never worked | Fixed: per-flavour argument vectors, opengrep's verified against its own `scan --help`. |
+| 10 | **ZAP could never be detected.** Its version probe was given an empty environment; `zap.sh` needs `JAVA_HOME` and `PATH` to find a JVM, exited 1, and AppSec reported "not installed". The engine declared the variables it needed for the scan and the probe ignored the declaration. | **High** | Fixed: the probe gets the same declared environment the scan does. |
+| 11 | **ZAP's reported version was the JVM's.** `zap.sh` prints `Found Java version 21.0.2` before its own `2.17.0`; the parser took the first version-shaped token. A report would have named the wrong version of the tool that produced a finding. | Medium — a provenance failure | Fixed: only a line containing nothing but a version counts. |
+| 12 | **Rule ids carried the operator's local paths.** Both SAST engines rename a rule loaded from a local file to include that path, so a rule id embedded the directory layout and changed between runs whenever the rules directory was temporary — breaking deduplication and reproducibility. | Medium | Fixed: `--no-rewrite-rule-ids` for both. |
+| 13 | **Source analysis required the `verification` profile** while making no request to the target at all, so the safest engine was unavailable at the safest profile. | Low | Fixed: it requires `discovery`. |
+
+**All three engines now run against real binaries** — Nuclei v3.11.1, opengrep v1.29.0,
+ZAP 2.17.0 — closing the validation gap M4 shipped with. Two of the three integrations
+were broken, and neither failure was reachable from a fixture.
+
+**Both reference applications are now assessed while running**, by
+`evals/reference_test.go`, which asserts six invariants that must hold whatever the
+application is: every operation produces exactly one ledger row; every non-executed row
+carries a valid machine-readable cause and an operator-facing reason; confirmed findings
+carry evidence and observed findings stay unassessed; two runs produce an identical ledger
+and identical finding identities; the headline counters and the terminal agree with the
+ledger; and a run that executed nothing says so. It skips without
+`APPSEC_REFERENCE_TARGET`, so it costs a contributor nothing, and
+`.github/workflows/reference-apps.yml` boots both applications weekly.
+
+Verified live: `laravel-api` 38 operations / 11 executed / 10 blocked / 17 untested;
+`nestjs-api` 84 / 10 / 17 / 57. All six invariants hold on both.
+
 ## 10. Limitations of this validation
 
-- **ZAP and Semgrep/opengrep were never run.** Docker image pulls failed in this
-  environment (even a 3 MB image would not transfer, though the registry
-  responded), so only Nuclei — installable through the repository's own Go-based
-  CI command — could be exercised. H4 is partial for this reason.
+- **Semgrep itself was never run**, only opengrep. Its argument vector is the one M4 wrote
+  against Semgrep's documented CLI and remains unverified against a binary — which is
+  exactly the condition that made opengrep's integration broken for a milestone.
+  ~~ZAP and Semgrep/opengrep were never run.~~ *Closed: all three engines now run. Docker
+  image pulls failed in this environment, so the engines were installed by the repository's
+  own Go CI command and by pinned GitHub release binaries instead.*
 - **No confirmed authorization vulnerability exists in either live application.**
   Both enforce the boundaries they define, so every live authorization result is
   a true negative. AppSec's ability to *detect* a real BOLA still rests entirely

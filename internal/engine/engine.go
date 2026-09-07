@@ -304,9 +304,13 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	// refusing access.
 	probeIdentities(ctx, opts.Identities)
 
-	excluded := map[string]bool{}
-	for _, id := range opts.ExcludeOperations {
-		excluded[id] = true
+	// The exclusion list is matched against both spellings of an operation's
+	// path, because an operator reads the application and the specification
+	// spells it differently. See model.Operation.MatchesID: matching only the
+	// specification's spelling made this fail open, and this is the control that
+	// says "never send this request".
+	excludedBy := func(op model.Operation) bool {
+		return op.MatchesAnyID(opts.ExcludeOperations)
 	}
 
 	type job struct {
@@ -328,14 +332,18 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 				IdentityID: model.AnonymousIdentity().ID,
 			}
 
-			if excluded[op.ID] {
+			if excludedBy(op) {
 				base.Disposition = model.DispositionUntested
 				base.Cause = model.CauseSafetyPolicy
 				base.Detail = "excluded by configuration"
 				lg.add(base)
 				continue
 			}
-			if opts.ExcludeAuthEndpoints && looksLikeAuthRoute(op.PathTemplate) {
+			// Both spellings are tested. This heuristic exists to avoid locking
+			// real accounts out, so the fail-safe direction is to skip when
+			// either form looks like an authentication route.
+			if opts.ExcludeAuthEndpoints &&
+				(looksLikeAuthRoute(op.PathTemplate) || looksLikeAuthRoute(op.AbsolutePath())) {
 				base.Disposition = model.DispositionUntested
 				base.Cause = model.CauseSafetyPolicy
 				base.Detail = "skipped because the path looks like an authentication route; " +

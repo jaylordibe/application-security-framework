@@ -377,12 +377,10 @@ func (f Fixture) AppliesTo(op model.Operation) bool {
 	if len(f.Operations) == 0 {
 		return true
 	}
-	for _, id := range f.Operations {
-		if id == op.ID {
-			return true
-		}
-	}
-	return false
+	// Both spellings, for the same reason the exclusion list accepts both: an
+	// operator naming an operation reads it from the application, not from the
+	// specification's server-relative template.
+	return op.MatchesAnyID(f.Operations)
 }
 
 // Addresses reports whether an operation actually identifies this fixture's

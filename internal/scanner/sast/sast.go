@@ -39,6 +39,16 @@ import (
 // one with fewer surprises unless they say otherwise.
 var candidates = []string{"opengrep", "semgrep"}
 
+// isOpengrep reports whether an executable is opengrep rather than Semgrep.
+//
+// The two forks diverged in their command line, so this decides which argument
+// vector is built. It is a name check because there is nothing better: asking
+// the binary costs a process per run, and a wrong answer here fails loudly with
+// "unknown option" rather than silently, which is the safe direction.
+func isOpengrep(path string) bool {
+	return strings.Contains(strings.ToLower(filepath.Base(path)), "opengrep")
+}
+
 // Engine is the static-analysis integration.
 type Engine struct{}
 
@@ -68,7 +78,20 @@ func (Engine) Meta() scanner.Meta {
 // application's source, which is a different kind of access from reading a
 // specification, and because a profile is the place an operator states what
 // this run is allowed to touch.
-func (Engine) RequiredProfile(scanner.Settings) model.Profile { return model.ProfileVerification }
+// RequiredProfile is the safety profile a source-analysis run needs.
+//
+// Discovery, which is the lowest rung. The profiles grade risk to the target,
+// and this engine sends the target nothing at all: it reads a checkout the
+// operator pointed at and never opens a socket. Requiring verification made the
+// safest engine unavailable at the safest profile — an operator assessing a
+// production system under `discovery` could not run the one analysis that cannot
+// possibly affect it.
+//
+// The risk this engine does carry is to the operator, not the target: it
+// executes a third-party binary over their source. That is governed by the fact
+// that nothing runs unless it is explicitly enabled and its executable
+// configured, which is the same gate every engine has.
+func (Engine) RequiredProfile(scanner.Settings) model.Profile { return model.ProfileDiscovery }
 
 // Detect resolves the executable and asks it for its version.
 func (Engine) Detect(ctx context.Context, s scanner.Settings) scanner.Availability {
@@ -93,7 +116,7 @@ func (Engine) Detect(ctx context.Context, s scanner.Settings) scanner.Availabili
 		"the executable at " + path + " is whatever is installed; AppSec Framework records its " +
 			"path and self-reported version but cannot establish its provenance",
 	}
-	if strings.Contains(strings.ToLower(filepath.Base(path)), "semgrep") {
+	if !isOpengrep(path) {
 		warn = append(warn, "Semgrep's metrics default to AUTO, which sends telemetry when rules "+
 			"are pulled from its registry. AppSec Framework passes --metrics=off and requires "+
 			"local rules, but the setting is the engine's and can be changed elsewhere")
@@ -175,22 +198,62 @@ func (Engine) Invocation(
 		return scanner.Invocation{}, fmt.Errorf("the rule source %s cannot be read", absRules)
 	}
 
-	args := []string{
-		"--config", absRules,
-		// Structured output, never scraped terminal text.
-		"--json",
-		"--output", w.OutputPath,
-		// No telemetry. Semgrep's default is AUTO, which sends when rules come
-		// from its registry; this is off regardless.
-		"--metrics=off",
-		// Never prompt, never open a browser, never require an account.
-		"--disable-version-check",
-		"--quiet",
-		"--no-git-ignore",
-		// Bounds inside the engine, on top of the supervisor's.
-		"--timeout", strconv.Itoa(perRuleTimeoutSeconds),
-		"--max-target-bytes", strconv.Itoa(maxTargetBytes),
-		root,
+	// The two engines do NOT share a command line, and assuming they did meant
+	// the preferred one could never run.
+	//
+	// opengrep is a fork of Semgrep's open-source engine, and M4 recorded that
+	// supporting both "cost a name in a list". Running the real opengrep v1.29
+	// showed otherwise: it rejects `--metrics` outright — it removed telemetry
+	// rather than making it configurable — and has no `--output`,
+	// `--disable-version-check`, `--quiet`, `--timeout` or `--max-target-bytes`
+	// either. Every AppSec run with opengrep configured therefore exited 2 with
+	// "unknown option '--metrics'" and was correctly reported as blocked, which
+	// is the right failure but for a reason that was ours.
+	//
+	// The flags below are the ones the installed binary's own `scan --help`
+	// lists. Semgrep keeps the argument vector it had, which was written against
+	// Semgrep's documented CLI — see the limitation recorded in
+	// docs/engines/README.md, because that one has not been run.
+	var args []string
+	if isOpengrep(a.Path) {
+		args = []string{
+			"--config", absRules,
+			// Structured output on stdout: opengrep has no --output.
+			"--json",
+			// Rules decide what is scanned, not the repository's ignore file.
+			"--no-git-ignore",
+			// Keep the rule id the rule's author wrote.
+			//
+			// By default a rule loaded from a local path is renamed to include
+			// that path, so `appsec-marker` in /tmp/xyz/rules.yaml becomes
+			// `tmp.xyz.rules.appsec-marker`. That puts the operator's directory
+			// layout into every finding, and — because a rules directory is
+			// often a temporary or per-checkout path — changes the finding id
+			// between runs of the same assessment, which breaks both
+			// deduplication and the reproducibility this project claims.
+			"--no-rewrite-rule-ids",
+			root,
+		}
+	} else {
+		args = []string{
+			"--config", absRules,
+			// Structured output, never scraped terminal text.
+			"--json",
+			"--output", w.OutputPath,
+			// No telemetry. Semgrep's default is AUTO, which sends when rules
+			// come from its registry; this is off regardless.
+			"--metrics=off",
+			// Never prompt, never open a browser, never require an account.
+			"--disable-version-check",
+			"--quiet",
+			"--no-git-ignore",
+			// Keep the rule id the rule's author wrote; see the opengrep branch.
+			"--no-rewrite-rule-ids",
+			// Bounds inside the engine, on top of the supervisor's.
+			"--timeout", strconv.Itoa(perRuleTimeoutSeconds),
+			"--max-target-bytes", strconv.Itoa(maxTargetBytes),
+			root,
+		}
 	}
 
 	return scanner.Invocation{

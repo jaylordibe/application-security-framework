@@ -1,24 +1,40 @@
 # Application Security Framework
 
-**Evidence-based application security assessment.**
+**An assessment-coverage and verification layer.**
 
-AppSec Framework derives what an application *says* should be protected from the
-application's own metadata, observes what it *actually* does, and reports the difference
-— together with an explicit account of everything it could not test.
+AppSec Framework runs the security engines you already trust, refuses to overstate what
+they found, and produces a defensible account of what was tested, what was blocked, what
+was never attempted, and why.
+
+Most scanners answer *"what did you find?"*. This one is built to answer the question that
+actually decides whether a report means anything:
+
+> **"What did you not test?"**
+
+On a real application it reports things like *10 of 84 operations executed* — with a
+machine-readable cause for each of the other 74. A scan that exercised a tenth of the
+surface and found nothing is not a clean result, and saying so is the product.
 
 > **AppSec Framework does not prove that an application is secure.** A run with no
 > findings means only that the checks it executed, against the operations it could see,
-> produced none.
-> Every report states what was not tested and why. That is the point of the tool.
+> produced none. Every report states what was not tested and why.
 
-**Status: early foundation (v0.x).** Two checks are implemented: declared authentication
-with an authenticated control behind it (M1), and cross-owner resource access (M2).
-Framework adapters supply expectations the specification cannot express (M3, static tier),
-and external engines can be orchestrated for classes AppSec Framework does not test itself
-(M4). Schemas may change before 1.0. See
+It also brings its own checks — declared authentication with an authenticated control
+behind it (M1) and cross-owner resource access (M2) — and derives expectations from the
+application's own framework metadata where a specification is silent (M3). Those are
+contributors to the ledger rather than the headline: see
+[ADR-0017](docs/adr/0017-reposition-to-coverage-and-verification.md) for why, and the
+[product validation gate](docs/evaluation/product-validation-gate.md) for the evidence
+behind it.
+
+**Status: v0.x, release candidate.** All three external engines are proven against real
+binaries (Nuclei v3.11.1, opengrep v1.29.0, ZAP 2.17.0), both reference applications are
+assessed while running in CI, and the pre-1.0 blockers from the
+[validation gate](docs/evaluation/product-validation-gate.md) are closed. Schemas may still
+change before 1.0. See
 [What AppSec Framework does not do yet](#what-appsec-framework-does-not-do-yet) before
-relying on it. It has not been evaluated for precision or recall against a corpus
-of real applications, so no detection-quality claim is made.
+relying on it. It has not been evaluated for precision or recall against a corpus of real
+applications, so no detection-quality claim is made.
 
 ---
 
@@ -430,6 +446,7 @@ authentication bypass — a silent pass is the worst possible default for a secu
 | [Engines on real applications](docs/evaluation/engines-on-reference-applications.md) | what M4 ran, what it could not, and why M4 is partial |
 | [Product validation gate](docs/evaluation/product-validation-gate.md) | does this justify its complexity? evidence, and a REPOSITION recommendation |
 | [Discovery on real applications](docs/evaluation/discovery-on-reference-applications.md) | what M5 finds on the reference apps, and why that is mostly nothing |
+| [ADR-0017: the reposition](docs/adr/0017-reposition-to-coverage-and-verification.md) | why the ledger is the product and authorization is a contributor |
 | [ADRs](docs/adr/) | consequential decisions and their alternatives |
 | [Roadmap](docs/roadmap.md) | what is next, and what is explicitly out |
 

@@ -49,6 +49,31 @@ makes the corpus an unrecorded dependency. Point it at a checkout; if it is a gi
 checkout the commit is recorded, and if it is not, the report says the corpus is
 unpinned.
 
+### opengrep and Semgrep do not share a command line
+
+They are close enough to look identical and are not. Verified against
+opengrep v1.29.0's own `scan --help`:
+
+| Flag | Semgrep | opengrep |
+|---|---|---|
+| `--config`, `--json`, `--no-git-ignore`, `--no-rewrite-rule-ids` | yes | yes |
+| `--output` | yes | **no** — results come back on stdout |
+| `--metrics=off` | yes | **no** — opengrep removed telemetry rather than making it configurable |
+| `--disable-version-check` | yes | **no** |
+| `--quiet`, `--timeout`, `--max-target-bytes` | yes | **no** |
+
+AppSec builds a different argument vector for each, chosen by the executable's name.
+Before that it passed Semgrep's flags to both, so every opengrep run exited 2 with
+`unknown option '--metrics'` — the preferred engine could never run.
+
+`--no-rewrite-rule-ids` is passed to both. Without it, a rule loaded from a local file is
+renamed to include that file's path, so `appsec-marker` in `/tmp/xyz/rules.yaml` becomes
+`tmp.xyz.rules.appsec-marker`: the operator's directory layout ends up in every finding,
+and the finding id changes between runs whenever the rules directory is temporary.
+
+**Semgrep's own argument vector has not been verified against a real binary.** opengrep
+has. If you run Semgrep and something is rejected, that is the reason.
+
 ### Your own templates are unsigned
 
 Nuclei skips templates that carry no signature, and a template you wrote carries
@@ -80,6 +105,17 @@ that held.
 A mixed corpus runs, and the provenance says how much of it did: *"40 of 52
 templates are signed and the remaining 12 are excluded from execution, so the
 corpus that ran is smaller than the directory."*
+
+### ZAP needs three environment variables
+
+`zap.sh` is a launcher: it locates a JVM and execs it. It is given `JAVA_HOME`, `PATH` and
+`TMPDIR`, and nothing else — not the assessment's credentials, not your shell. Given
+nothing at all, as it was before the release gate, it cannot find java, exits 1, and AppSec
+reports ZAP as not installed.
+
+Its version is read from the line containing only a version number. `zap.sh` prints
+`Found Java version 21.0.2` before its own `2.17.0`, and taking the first version-shaped
+token recorded the JVM as the engine.
 
 Hardening applied on every run, checked against Nuclei v3.11.x:
 

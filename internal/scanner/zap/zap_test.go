@@ -193,3 +193,62 @@ func mentions(all []string, substr string) bool {
 	}
 	return false
 }
+
+// zap.sh talks about the JVM before it starts it, and the first version-shaped
+// token in its output is Java's. Recording that as the engine version is a
+// provenance failure, and provenance is most of what this project claims to add
+// over running the scanner directly.
+func TestVersionIsZAPsOwnNotTheJVMs(t *testing.T) {
+	// Verbatim from ZAP 2.17.0 on JDK 21.
+	const real = "Found Java version 21.0.2\n" +
+		"Available memory: 36864 MB\n" +
+		"Using JVM args: -Xmx9216m\n" +
+		"2.17.0\n"
+
+	if got := parseVersion(real); got != "2.17.0" {
+		t.Errorf("parseVersion = %q, want ZAP's own 2.17.0 rather than the JVM's", got)
+	}
+
+	// The update warning appears on stderr after the version on some installs.
+	const withWarning = "Found Java version 21.0.2\n2.17.0\n" +
+		"No check for updates for over 3 month - add-ons may well be out of date\n"
+	if got := parseVersion(withWarning); got != "2.17.0" {
+		t.Errorf("parseVersion = %q with a trailing warning, want 2.17.0", got)
+	}
+
+	for _, none := range []string{"", "Found Java version 21.0.2", "no version here\n"} {
+		if got := parseVersion(none); got != "" {
+			t.Errorf("parseVersion(%q) = %q, want empty: only ZAP's own line counts", none, got)
+		}
+	}
+}
+
+// The launcher needs a JVM, and it locates one with JAVA_HOME and PATH. Probing
+// it with no environment at all meant zap.sh exited 1 and ZAP was reported as
+// not installed — so it could never be detected on a normal installation.
+func TestTheVersionProbeGetsTheEnvironmentTheLauncherNeeds(t *testing.T) {
+	want := map[string]bool{"JAVA_HOME": true, "PATH": true, "TMPDIR": true}
+	for _, n := range launcherEnvNames {
+		if !want[n] {
+			t.Errorf("the launcher is given %q, which it does not need", n)
+		}
+		delete(want, n)
+	}
+	for n := range want {
+		t.Errorf("the launcher is not given %q and cannot find a JVM without it", n)
+	}
+
+	// And the scan uses the same list, so detection and execution cannot drift.
+	dir := t.TempDir()
+	inv, err := Engine{}.Invocation(
+		scanner.Target{BaseURL: "http://127.0.0.1:8080", Profile: model.ProfileVerification},
+		scanner.Settings{Enabled: true},
+		scanner.Workspace{Dir: dir, OutputPath: filepath.Join(dir, "z.json")},
+		scanner.Availability{Present: true, Path: "/opt/zap/zap.sh", Version: "2.17.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.EnvNames) != len(launcherEnvNames) {
+		t.Errorf("the scan declares %v, the probe uses %v", inv.EnvNames, launcherEnvNames)
+	}
+}

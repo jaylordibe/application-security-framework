@@ -1,0 +1,132 @@
+name: reference applications
+
+# Assessment against the real reference applications, running.
+#
+# This exists because the synthetic corpus in evals/ let seven defects reach
+# main. Every one needed a real application to surface, and every one was
+# invisible to fixtures written by the same person who had just written the code.
+#
+# It is deliberately NOT part of pull-request CI. It clones two other
+# repositories, boots databases and installs their dependencies, so it is neither
+# hermetic nor fast, and a red tick here must never be confused with "this change
+# is broken". It is a periodic canary: when it fails, something about a real
+# application changed, or we broke something no fixture covers.
+#
+# Actions are pinned by commit SHA. A tag can be moved; a SHA cannot.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, so drift in the reference applications shows up on its own.
+    - cron: '23 5 * * 2'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reference-apps
+  cancel-in-progress: true
+
+jobs:
+  laravel:
+    name: laravel-api (specification with a server base path)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: check out the reference application
+        run: git clone --depth 1 https://github.com/jaylordibe/laravel-api.git "$RUNNER_TEMP/laravel-api"
+
+      - name: boot it
+        working-directory: ${{ runner.temp }}/laravel-api
+        # Its own documented one-command path. Nothing here is AppSec-specific:
+        # if this breaks, the application's own setup broke.
+        run: |
+          cp .env.example .env
+          docker compose up -d
+          # pg_isready ships inside the postgres image, so nothing is installed here.
+          for i in $(seq 1 60); do
+            docker exec laravel-db pg_isready -U laravel -d laravel_local >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec laravel-api bash -c '
+            cd /var/www/html &&
+            composer install --no-interaction --no-progress -q &&
+            php artisan key:generate --no-interaction &&
+            php artisan migrate:fresh --seed --no-interaction &&
+            php artisan passport:keys --force --no-interaction &&
+            php artisan passport:client --personal --name=ci --provider=users --no-interaction &&
+            chmod -R 775 storage bootstrap/cache'
+          for i in $(seq 1 60); do
+            curl -fsS -o /dev/null http://127.0.0.1:8000/docs/api.json && break
+            sleep 2
+          done
+
+      - name: assess it
+        env:
+          APPSEC_REFERENCE_TARGET: http://127.0.0.1:8000
+          APPSEC_REFERENCE_SPEC: http://127.0.0.1:8000/docs/api.json
+        run: go test -v -count=1 -run TestReferenceApplication ./evals/
+
+      - name: end-to-end through the CLI an operator would run
+        run: |
+          go build -o appsec ./cmd/appsec
+          ./appsec scan http://127.0.0.1:8000 --spec-url http://127.0.0.1:8000/docs/api.json \
+            -o "$RUNNER_TEMP/run" || true
+          # A clean tree afterwards: no engine or run artefact may be left behind
+          # in the working directory. This is how .nuclei-config was found.
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the assessment left artefacts in the working tree:"
+            git status --porcelain
+            exit 1
+          fi
+
+  nestjs:
+    name: nestjs-api (ownership, tenancy and scoped permissions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 24
+
+      - name: check out the reference application
+        run: git clone --depth 1 https://github.com/jaylordibe/nestjs-api.git "$RUNNER_TEMP/nestjs-api"
+
+      - name: boot it
+        working-directory: ${{ runner.temp }}/nestjs-api
+        run: |
+          cp .env.example .env
+          # JWT_SECRET is empty in the template and the application refuses to
+          # start without it.
+          python3 - <<'PY'
+          import pathlib, re, secrets
+          p = pathlib.Path(".env"); s = p.read_text()
+          p.write_text(re.sub(r'^JWT_SECRET=.*$',
+                              'JWT_SECRET="' + secrets.token_hex(32) + '"', s, flags=re.M))
+          PY
+          docker compose up -d
+          yarn install --frozen-lockfile --non-interactive
+          npx prisma generate
+          npx prisma migrate deploy
+          nohup yarn start:dev > "$RUNNER_TEMP/nestjs.log" 2>&1 &
+          for i in $(seq 1 90); do
+            curl -fsS -o /dev/null http://127.0.0.1:3000/api/docs-json && break
+            sleep 2
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:3000/api/docs-json || {
+            echo "::error::the application did not start"; tail -40 "$RUNNER_TEMP/nestjs.log"; exit 1; }
+
+      - name: assess it
+        env:
+          APPSEC_REFERENCE_TARGET: http://127.0.0.1:3000
+          APPSEC_REFERENCE_SPEC: http://127.0.0.1:3000/api/docs-json
+        run: go test -v -count=1 -run TestReferenceApplication ./evals/

@@ -99,11 +99,6 @@ func planOwnership(opts Options, lg *ledger) []ownershipUnit {
 		}
 	}
 
-	excluded := map[string]bool{}
-	for _, id := range opts.ExcludeOperations {
-		excluded[id] = true
-	}
-
 	var units []ownershipUnit
 	var capped int
 
@@ -192,7 +187,7 @@ func planOwnership(opts Options, lg *ledger) []ownershipUnit {
 					plan.ReadURL = readBinding.URL
 				}
 
-				if excluded[op.ID] {
+				if op.MatchesAnyID(opts.ExcludeOperations) {
 					lg.add(planRow(plan, opts.ResourceCheck, model.DispositionUntested,
 						model.CauseSafetyPolicy, "excluded by configuration"))
 					continue

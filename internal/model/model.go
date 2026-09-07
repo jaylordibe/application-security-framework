@@ -273,6 +273,47 @@ func (o Operation) AbsolutePath() string {
 	return prefix + o.PathTemplate
 }
 
+// MatchesID reports whether an operator-supplied identifier names this operation.
+//
+// It accepts both spellings, and that is not laxity — it is the only honest
+// answer to a genuine ambiguity the operator did not create.
+//
+// An operation has two true paths. OpenAPI defines the template relative to the
+// document's server URL, so a document with `servers: [{url: "https://x/api"}]`
+// spells a route `/orders`; the application serves it at `/api/orders`, which is
+// what the framework's route list, the browser and the access log all say. An
+// operator writing `assessment.excludeOperations` reads the second and has no
+// reason to suspect the first exists.
+//
+// Matching only the specification's spelling made that a silent no-match, and
+// for an exclusion list a silent no-match means an operation the operator
+// explicitly forbade is exercised anyway. A safety control that fails open
+// because of a spelling neither spelling is wrong in is not a safety control.
+func (o Operation) MatchesID(candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return false
+	}
+	if candidate == o.ID {
+		return true
+	}
+	if abs := o.AbsolutePath(); abs != o.PathTemplate {
+		return candidate == OperationID(o.Method, abs)
+	}
+	return false
+}
+
+// MatchesAnyID reports whether any operator-supplied identifier names this
+// operation.
+func (o Operation) MatchesAnyID(candidates []string) bool {
+	for _, c := range candidates {
+		if o.MatchesID(c) {
+			return true
+		}
+	}
+	return false
+}
+
 // RequiredPathParams returns the names of path parameters that must be given a
 // value before the operation can be exercised meaningfully.
 //

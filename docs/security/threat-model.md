@@ -1008,6 +1008,26 @@ rate limiter as the rest of the assessment. It is not a scan and cannot be turne
 into one by configuration, because there is no depth, seed list or wordlist to
 configure.
 
+### T-20a Operator-supplied identifiers must match what the operator can see
+
+`assessment.excludeOperations` is a safety control: it is how an operator says "never send
+this request", and it is the mechanism protecting destructive endpoints from a sweep.
+
+It was matched against `Operation.ID`, which carries the specification-relative path. An
+operator reads their running application — the framework's route list, the browser, the
+access log — and writes the path it is served at. Against any specification with a
+`servers` base path, which is every Scramble-generated Laravel document, the two never
+matched, and the operation the operator forbade was exercised. A safety control that fails
+open because of a spelling in which neither spelling is wrong is not a safety control.
+
+Every operator-facing identifier now accepts both forms. **TESTED**
+(`model.TestOperationMatchesBothSpellingsOfItsPath`,
+`evals.TestExcludedOperationIsNeverRequested`, which asserts the property that matters —
+that no request reaches the excluded operation — rather than the comparison behind it).
+
+The authentication-route heuristic tests both forms too, and skips when either matches:
+it exists to avoid locking real accounts out, so the fail-safe direction is to skip.
+
 ### T-21 Ownership fixtures address objects, not endpoints
 
 An ownership fixture describes one object. The check it drives asks whether an

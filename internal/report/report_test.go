@@ -469,3 +469,37 @@ func TestSummarySaysNothingAboutAHealthyIdentity(t *testing.T) {
 		t.Errorf("a healthy identity produced terminal noise:\n%s", got)
 	}
 }
+
+// A component that failed did not assess what it was there to assess. The stderr
+// line announcing it has scrolled past by the time a run ends; the summary is
+// what an operator reads and pastes into a ticket.
+func TestSummaryStatesComponentsThatFailed(t *testing.T) {
+	got := Summary(Document{ToolFailures: []string{
+		"adapter laravel exited with status 2 and produced no document, so no framework " +
+			"expectation was contributed and the operations it would have described keep " +
+			"whatever the specification said",
+	}})
+
+	if !strings.Contains(got, "1 component failed") {
+		t.Errorf("a failed component is invisible in the terminal:\n%s", got)
+	}
+	if !strings.Contains(got, "adapter laravel exited with status 2") {
+		t.Errorf("the summary does not say which component or why:\n%s", got)
+	}
+	// Checked on the unwrapped text: the sentence is deliberately long enough to
+	// wrap, and asserting a phrase that straddles a line break tests the wrapper
+	// rather than the message.
+	flat := strings.Join(strings.Fields(got), " ")
+	if !strings.Contains(flat, "was not assessed") || !strings.Contains(flat, "not a clean result") {
+		t.Errorf("the summary does not say what the failure costs:\n%s", got)
+	}
+	if strings.Count(got, "    - ") != 1 {
+		t.Errorf("the bullet repeated on wrapped lines:\n%s", got)
+	}
+}
+
+func TestSummarySaysNothingWhenNothingFailed(t *testing.T) {
+	if got := Summary(Document{}); strings.Contains(got, "failed during this run") {
+		t.Errorf("a clean run reported component failures:\n%s", got)
+	}
+}

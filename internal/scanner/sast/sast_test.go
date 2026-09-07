@@ -127,14 +127,38 @@ func TestInvocationDisablesTelemetryAndNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invocation: %v", err)
 	}
+	// opengrep has no telemetry to disable and no --disable-version-check: it
+	// removed the feature rather than making it configurable. Asserting those
+	// flags here asserted a bug, and the real binary rejected the invocation
+	// outright. What must hold for opengrep is structured output and no network
+	// behaviour it does not need.
 	args := strings.Join(inv.Spec.Args, " ")
-	for _, required := range []string{"--metrics=off", "--disable-version-check", "--json"} {
-		if !strings.Contains(args, required) {
-			t.Errorf("the invocation omits %s: %s", required, args)
+	if !strings.Contains(args, "--json") {
+		t.Errorf("the invocation omits --json: %s", args)
+	}
+	for _, absent := range []string{"--metrics", "--disable-version-check"} {
+		if strings.Contains(args, absent) {
+			t.Errorf("opengrep was passed %s, which its CLI rejects: %s", absent, args)
 		}
 	}
 	if inv.Provenance.Verified {
 		t.Error("a user-installed binary was reported as verified")
+	}
+
+	// Semgrep does have telemetry, and it stays off.
+	sg, err := Engine{}.Invocation(
+		scanner.Target{SourceRoot: t.TempDir(), Profile: model.ProfileVerification},
+		scanner.Settings{Enabled: true, RuleSource: rules},
+		scanner.Workspace{Dir: t.TempDir(), OutputPath: filepath.Join(t.TempDir(), "o.json")},
+		scanner.Availability{Present: true, Path: "/usr/local/bin/semgrep", Version: "1.0.0"})
+	if err != nil {
+		t.Fatalf("invocation: %v", err)
+	}
+	sgArgs := strings.Join(sg.Spec.Args, " ")
+	for _, required := range []string{"--metrics=off", "--disable-version-check", "--json"} {
+		if !strings.Contains(sgArgs, required) {
+			t.Errorf("the semgrep invocation omits %s: %s", required, sgArgs)
+		}
 	}
 }
 
@@ -165,6 +189,109 @@ func TestMalformedOutputIsAnError(t *testing.T) {
 func mentions(all []string, substr string) bool {
 	for _, s := range all {
 		if strings.Contains(s, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// The profiles grade risk to the target, and this engine sends the target
+// nothing: it reads a local checkout and never opens a socket. Requiring
+// verification made the safest engine unavailable at the safest profile.
+func TestSourceAnalysisRunsAtTheLowestProfile(t *testing.T) {
+	if got := (Engine{}).RequiredProfile(scanner.Settings{}); got != model.ProfileDiscovery {
+		t.Errorf("required profile = %s, want discovery: this engine makes no request to the "+
+			"target, so no profile above the lowest can be justified", got)
+	}
+	// And it must be permitted at every higher profile too.
+	for _, p := range []model.Profile{
+		model.ProfileDiscovery, model.ProfileVerification, model.ProfileIntrusive,
+	} {
+		if !p.Permits(Engine{}.RequiredProfile(scanner.Settings{})) {
+			t.Errorf("profile %s does not permit source analysis", p)
+		}
+	}
+}
+
+// M4 recorded that supporting opengrep alongside Semgrep "cost a name in a
+// list", on the belief that the fork shares Semgrep's command line. Running the
+// real opengrep v1.29.0 during the release gate showed otherwise, and the
+// consequence was that the *preferred* engine could never run: every invocation
+// exited 2 with "unknown option '--metrics'".
+func TestOpengrepAndSemgrepGetDifferentArgumentVectors(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "r.yaml"), []byte("rules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	w := scanner.Workspace{Dir: t.TempDir(), OutputPath: filepath.Join(t.TempDir(), "r.json")}
+	settings := scanner.Settings{Enabled: true, RuleSource: dir}
+	target := scanner.Target{SourceRoot: src, Profile: model.ProfileVerification}
+
+	// Flags verified absent from the installed opengrep's own `scan --help`.
+	absentFromOpengrep := []string{
+		"--metrics=off", "--output", "--disable-version-check", "--quiet",
+		"--timeout", "--max-target-bytes",
+	}
+
+	og, err := Engine{}.Invocation(target, settings, w,
+		scanner.Availability{Present: true, Path: "/usr/local/bin/opengrep", Version: "1.29.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range absentFromOpengrep {
+		for _, a := range og.Spec.Args {
+			if a == flag {
+				t.Errorf("opengrep was passed %s, which its CLI does not accept", flag)
+			}
+		}
+	}
+	if !contains(og.Spec.Args, "--json") || !contains(og.Spec.Args, "--no-rewrite-rule-ids") {
+		t.Errorf("opengrep lost a flag it needs: %v", og.Spec.Args)
+	}
+
+	sg, err := Engine{}.Invocation(target, settings, w,
+		scanner.Availability{Present: true, Path: "/usr/local/bin/semgrep", Version: "1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Semgrep keeps telemetry suppression, which is the whole reason the flag
+	// existed: opengrep has no telemetry to suppress.
+	if !contains(sg.Spec.Args, "--metrics=off") {
+		t.Errorf("semgrep lost --metrics=off: %v", sg.Spec.Args)
+	}
+	if !contains(sg.Spec.Args, "--no-rewrite-rule-ids") {
+		t.Errorf("semgrep lost --no-rewrite-rule-ids: %v", sg.Spec.Args)
+	}
+}
+
+// A rule id that carries the operator's rules-directory path changes between
+// runs whenever that directory is temporary or per-checkout, which breaks both
+// finding deduplication and the reproducibility this project claims.
+func TestRuleIdsAreNotRewrittenToIncludeLocalPaths(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "r.yaml"), []byte("rules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/usr/local/bin/opengrep", "/usr/local/bin/semgrep"} {
+		inv, err := Engine{}.Invocation(
+			scanner.Target{SourceRoot: t.TempDir(), Profile: model.ProfileVerification},
+			scanner.Settings{Enabled: true, RuleSource: dir},
+			scanner.Workspace{Dir: t.TempDir(), OutputPath: filepath.Join(t.TempDir(), "o.json")},
+			scanner.Availability{Present: true, Path: path, Version: "1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !contains(inv.Spec.Args, "--no-rewrite-rule-ids") {
+			t.Errorf("%s: rule ids would be rewritten to include the rules path: %v",
+				filepath.Base(path), inv.Spec.Args)
+		}
+	}
+}
+
+func contains(all []string, want string) bool {
+	for _, a := range all {
+		if a == want {
 			return true
 		}
 	}

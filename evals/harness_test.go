@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -294,5 +295,92 @@ func TestBlocked_NonReproducibleSuccessIsNotAFinding(t *testing.T) {
 	res, _ := runAgainst(t, mux)
 	if got := findingsFor(res, "GET /api/profile"); len(got) != 0 {
 		t.Fatalf("non-reproducible success reported as a finding: %+v", got)
+	}
+}
+
+// The exclusion list is a safety control: it is how an operator says "never send
+// this request". It failed open against any specification carrying a server base
+// path, which is every Scramble-generated Laravel document and most NestJS ones.
+//
+// This asserts the property that matters — no request reaches the excluded
+// operation — rather than the string comparison behind it.
+func TestExcludedOperationIsNeverRequested(t *testing.T) {
+	var mu sync.Mutex
+	var hit []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hit = append(hit, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	port := serverPort(t, srv.URL)
+	pol, err := scope.New([]scope.Entry{{Host: "127.0.0.1", Ports: []int{port}}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := httpx.New(httpx.Options{
+		Policy: pol, Redactor: redact.New(), Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Shaped like the reference applications': paths relative to a server base
+	// path, so the operation id is "/danger" while the application serves
+	// "/api/danger".
+	doc := `{
+	  "openapi": "3.0.3",
+	  "info": {"title": "t", "version": "1"},
+	  "servers": [{"url": "` + srv.URL + `/api"}],
+	  "paths": {
+	    "/danger": {"get": {"operationId": "danger", "security": [{"b": []}]}},
+	    "/safe":   {"get": {"operationId": "safe",   "security": [{"b": []}]}}
+	  },
+	  "components": {"securitySchemes": {"b": {"type": "http", "scheme": "bearer"}}}
+	}`
+	parsed, err := openapi.Parse([]byte(doc), srv.URL, model.Source{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := engine.Run(context.Background(), engine.Options{
+		RunID: "eval", Target: srv.URL, Profile: model.ProfileVerification,
+		Surface: engine.Surface{
+			SpecDerived: true, Operations: parsed.Operations, Fidelity: parsed.Fidelity,
+		},
+		Checks: []engine.Check{check.AuthRequired{Client: client, BaselineProbes: 1}},
+		// Written exactly as an operator would, having read the running
+		// application rather than the specification.
+		ExcludeOperations: []string{"GET /api/danger"},
+		Concurrency:       1, RequestsPerSecond: 200,
+		Now: func() time.Time { return time.Unix(0, 0) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	made := append([]string(nil), hit...)
+	mu.Unlock()
+	for _, h := range made {
+		if strings.Contains(h, "/danger") {
+			t.Fatalf("an excluded operation was requested (%s); requests: %v", h, made)
+		}
+	}
+
+	row, ok := entryFor(res, "GET /danger")
+	if !ok {
+		t.Fatal("the excluded operation vanished from the ledger instead of being accounted for")
+	}
+	if row.Disposition != model.DispositionUntested || row.Cause != model.CauseSafetyPolicy {
+		t.Errorf("excluded row = %s/%s, want untested/safety_policy", row.Disposition, row.Cause)
+	}
+	// The operation that was not excluded must still have been assessed, or this
+	// test would pass by doing nothing at all.
+	if safe, ok := entryFor(res, "GET /safe"); !ok || safe.Disposition != model.DispositionExecuted {
+		t.Errorf("the non-excluded operation was not assessed: %+v", safe)
 	}
 }

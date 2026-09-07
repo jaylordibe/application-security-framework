@@ -909,6 +909,30 @@ func Summary(doc Document) string {
 	// nothing. The count is deliberately not folded into the findings line:
 	// these are another tool's claims, and merging them would be exactly the
 	// promotion this project refuses to do.
+	// Anything that failed is stated in the summary.
+	//
+	// Component failures are already printed to stderr as they happen, which is
+	// not the same thing: by the time a run finishes, that line has scrolled
+	// past, and the summary is what an operator reads and pastes into a ticket.
+	// A tool that failed did not assess what it was there to assess, so a
+	// summary that omits it is a summary that reads cleaner than the run was.
+	if n := len(doc.ToolFailures); n > 0 {
+		b.WriteString("\n")
+		noun := "components"
+		if n == 1 {
+			noun = "component"
+		}
+		b.WriteString("  " + strconv.Itoa(n) + " " + noun + " failed during this run:\n")
+		for _, f := range doc.ToolFailures {
+			// wrap() repeats its indent on every line, so the bullet is written
+			// once and the continuation is indented to line up under it.
+			wrapped := wrap(f, 74, "      ")
+			b.WriteString("    - " + strings.TrimLeft(wrapped, " "))
+		}
+		b.WriteString(wrap("Whatever each of these would have assessed was not assessed. This "+
+			"is not a clean result for that work.", 76, "  "))
+	}
+
 	// An identity that is unusable or that the target rejected is stated in the
 	// terminal.
 	//

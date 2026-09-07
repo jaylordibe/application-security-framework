@@ -16,14 +16,16 @@ var Version = "0.0.0-dev"
 func Execute(args []string, stdout, stderr io.Writer) int {
 	root := &cobra.Command{
 		Use:   "appsec",
-		Short: "Evidence-based application security assessment",
+		Short: "Assessment coverage and verification",
 		Long: "AppSec Framework assesses an application you own or are explicitly\n" +
 			"authorized to test.\n\n" +
-			"It derives what the application says should be protected, observes what it\n" +
-			"actually does, and reports the difference — together with an explicit account\n" +
-			"of everything it could not test.\n\n" +
+			"It runs the security engines you already trust, refuses to overstate what\n" +
+			"they found, and produces an account of what was tested, what was blocked,\n" +
+			"what was never attempted, and why. It brings its own authentication and\n" +
+			"cross-owner checks, which contribute to that account rather than replace it.\n\n" +
 			"AppSec Framework does not prove the absence of vulnerabilities. A run\n" +
-			"with no findings means only that the checks it executed produced none.",
+			"with no findings means only that the checks it executed produced none —\n" +
+			"and the report always says how many that was, out of how many it saw.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,
