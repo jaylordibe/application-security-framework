@@ -234,6 +234,21 @@ Found by running the real Nuclei v3.11.1 and a live `laravel-api` instance, none
 - `TestDoctorReportsMissingEnginesWithoutFailing` depended on the ambient `PATH`, so it
   passed only on machines without an engine installed — including, backwards, breaking on
   any machine where the repository's own engine-integration job had run.
+- **The cross-owner check produced fourteen confirmed high false positives against a real
+  application.** An ownership fixture with no explicit operation allowlist applied to every
+  operation it could bind, and an operation with no path parameters binds trivially — so a
+  device-token fixture was applied to `GET /api/health/liveness`, `GET /api/enums`,
+  `GET /api/roles` and eleven others. Two identities receive identical bodies from a health
+  endpoint, as they must, and each was reported as "a resource is readable by an identity
+  that does not own it", confirmed, high, exit 1. A fixture now applies only where it
+  addresses an object: the operation must have at least one required path parameter and the
+  fixture must supply all of them. The same run afterwards: no findings, exit 0, one
+  boundary checked — the real one.
+- **`appsec scan http://localhost:3000` aborted against a running target.** `localhost`
+  resolves to `::1` and `127.0.0.1`, most Node development servers bind IPv4 only, and the
+  dialer scope-checked every resolved address and then dialled only the first. Each
+  authorized address is now tried in turn, sequentially; a single denied address still
+  refuses the request before any dial.
 - **An external engine wrote into the operator's working directory.** An engine's
   environment is built from nothing, so it has no `HOME`, and Nuclei responds by creating a
   `.nuclei-config` tree wherever it was started. A scan is contained by its workspace, but

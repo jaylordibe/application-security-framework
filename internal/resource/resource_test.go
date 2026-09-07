@@ -259,16 +259,71 @@ func TestAppliesTo(t *testing.T) {
 	read := op("GET", "/api/orders/{orderId}", "orderId")
 	other := op("GET", "/api/invoices/{invoiceId}", "invoiceId")
 
-	unrestricted := Fixture{}
+	unrestricted := Fixture{Values: map[string]string{"orderId": "1", "invoiceId": "2"}}
 	if !unrestricted.AppliesTo(read) || !unrestricted.AppliesTo(other) {
-		t.Error("a fixture with no operation allowlist must apply everywhere it can bind")
+		t.Error("a fixture with no allowlist must apply wherever it addresses an object")
 	}
 
-	narrowed := Fixture{Operations: []string{read.ID}}
+	narrowed := Fixture{
+		Values:     map[string]string{"orderId": "1", "invoiceId": "2"},
+		Operations: []string{read.ID},
+	}
 	if !narrowed.AppliesTo(read) {
 		t.Error("an allowlisted operation was excluded")
 	}
 	if narrowed.AppliesTo(other) {
 		t.Error("an operation outside the allowlist was included")
+	}
+}
+
+// The defect this pins produced fourteen CONFIRMED HIGH false positives against
+// a real application during the product validation gate.
+//
+// A device-token fixture was applied to every operation it could "bind", and an
+// operation with no path parameters binds trivially. So GET /api/health/liveness,
+// GET /api/enums and GET /api/roles were each probed as two identities, returned
+// identical bodies — as health and enumeration endpoints must — and each was
+// reported as "a resource is readable by an identity that does not own it".
+func TestAFixtureDoesNotApplyToOperationsThatAddressNoObject(t *testing.T) {
+	f := Fixture{
+		ID: "alice-device-token", Owner: "alice", CrossOwnerAccess: CrossOwnerDenied,
+		Values: map[string]string{"id": "f4237aed-0391-4daf-a2d6-5c09baf6fbc0"},
+	}
+
+	// Real operations from the reference NestJS application.
+	for _, name := range []string{
+		"/api/health/liveness", "/api/enums", "/api/enums/role-scopes",
+		"/api/roles", "/api/permissions", "/api/app-versions", "/api/businesses",
+	} {
+		o := op("GET", name)
+		if f.Addresses(o) {
+			t.Errorf("%s addresses no object, so it cannot be an ownership subject", name)
+		}
+		if f.AppliesTo(o) {
+			t.Errorf("the fixture was applied to %s, which names no object", name)
+		}
+	}
+
+	// The operation the fixture is actually about.
+	owned := op("GET", "/api/device-tokens/{id}", "id")
+	if !f.Addresses(owned) {
+		t.Error("the fixture does not address the operation it exists for")
+	}
+	if !f.AppliesTo(owned) {
+		t.Error("the fixture was not applied to the operation it exists for")
+	}
+
+	// An operation whose parameter this fixture cannot supply is a different
+	// resource, not this one.
+	elsewhere := op("GET", "/api/businesses/{businessId}", "businessId")
+	if f.AppliesTo(elsewhere) {
+		t.Error("the fixture was applied to an operation it cannot fill")
+	}
+
+	// Naming such an operation explicitly does not make the question meaningful.
+	explicit := f
+	explicit.Operations = []string{"GET /api/health/liveness"}
+	if explicit.AppliesTo(op("GET", "/api/health/liveness")) {
+		t.Error("an explicit allowlist made a parameterless operation an ownership subject")
 	}
 }

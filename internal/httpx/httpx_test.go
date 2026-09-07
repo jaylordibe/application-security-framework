@@ -287,3 +287,98 @@ func TestContextCancellationIsHonoured(t *testing.T) {
 		t.Fatal("cancelled request returned no error")
 	}
 }
+
+// Found during the product validation gate, running against a real NestJS
+// application: "localhost" resolves to ::1 and 127.0.0.1, the server bound IPv4
+// only, and the client dialled ::1, got connection-refused and aborted the whole
+// assessment. curl succeeds against the same target because it falls back.
+func TestDialFallsBackToTheNextAuthorizedAddress(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("reached"))
+	}))
+	defer srv.Close()
+
+	_, port, err := scope.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	policy, err := scope.New([]scope.Entry{{Host: "dual.test", Ports: []int{port}}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The name resolves to a loopback address nothing listens on, then to the
+	// one the server is actually bound to.
+	var dialled []string
+	c, err := New(Options{
+		Policy:   policy,
+		Redactor: redact.New(),
+		Timeout:  10 * time.Second,
+		Resolver: func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{
+				netip.MustParseAddr("::1"),
+				netip.MustParseAddr("127.0.0.1"),
+			}, nil
+		},
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialled = append(dialled, addr)
+			if strings.HasPrefix(addr, "[::1]") {
+				return nil, errors.New("connect: connection refused")
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ex, err := c.Do(context.Background(), Request{
+		Method: "GET", URL: fmt.Sprintf("http://dual.test:%d/", port),
+	})
+	if err != nil {
+		t.Fatalf("a target listening on only one of its addresses was unreachable: %v", err)
+	}
+	if ex.Response == nil || ex.Response.Status != 200 {
+		t.Fatalf("response = %+v", ex.Response)
+	}
+	if len(dialled) != 2 {
+		t.Errorf("dialled %v, want the refused address then the working one", dialled)
+	}
+}
+
+// Falling back must not become a way to reach an address scope refused. A single
+// denied address still refuses the whole request, before any dial.
+func TestFallbackNeverReachesAnUnauthorizedAddress(t *testing.T) {
+	policy, err := scope.New([]scope.Entry{{Host: "mixed.test", Ports: []int{80}}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dialled []string
+	c, err := New(Options{
+		Policy:   policy,
+		Redactor: redact.New(),
+		Resolver: func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{
+				netip.MustParseAddr("127.0.0.1"),
+				netip.MustParseAddr("169.254.169.254"), // cloud metadata
+			}, nil
+		},
+		Dial: func(_ context.Context, _, addr string) (net.Conn, error) {
+			dialled = append(dialled, addr)
+			return nil, errors.New("refused")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if _, err := c.Do(context.Background(), Request{Method: "GET", URL: "http://mixed.test/"}); err == nil {
+		t.Fatal("a host resolving to cloud metadata was contacted")
+	}
+	if len(dialled) != 0 {
+		t.Errorf("dialled %v; one denied address must refuse the request before any dial", dialled)
+	}
+}

@@ -706,6 +706,13 @@ adapters, so there is one implementation of every guarantee rather than three.
   that keeps touching a file and asserts it stops).
 - `WaitDelay`, so a child holding a pipe open cannot block the assessment
   indefinitely. **TESTED** (`scanner.TestHungPipeDoesNotBlockForever`).
+- Every resolved address is scope-checked before any dial, and the request is
+  refused entirely if any one of them is denied. Connection attempts then proceed
+  through the authorized addresses in turn, sequentially rather than raced, so a
+  name that resolves to more addresses than the target listens on is reachable
+  without the URL gate and the address gate ever separating. **TESTED**
+  (`httpx.TestDialFallsBackToTheNextAuthorizedAddress`,
+  `httpx.TestFallbackNeverReachesAnUnauthorizedAddress`).
 - Both pipes drained concurrently and bounded. Draining one to completion first
   deadlocks the moment the other fills, which a hostile engine can arrange.
   **TESTED** (`scanner.TestEngineFailuresAreExplicit`).
@@ -1000,6 +1007,29 @@ costs: by default at most twenty requests and eight megabytes, through the same
 rate limiter as the rest of the assessment. It is not a scan and cannot be turned
 into one by configuration, because there is no depth, seed list or wordlist to
 configure.
+
+### T-21 Ownership fixtures address objects, not endpoints
+
+An ownership fixture describes one object. The check it drives asks whether an
+identity that does not own that object can read it, and that question only has
+meaning when the request names the object at all.
+
+Applying a fixture to every operation it could *bind* was therefore wrong, and
+expensively so: an operation with no path parameters binds trivially, so a
+device-token fixture reached `GET /api/health/liveness`, `GET /api/enums` and
+`GET /api/roles` on the reference NestJS application. Two identities receive
+identical bodies from a health endpoint because that is correct behaviour, and
+each one became a **confirmed, high** finding that failed the build. Fourteen of
+them, all false.
+
+A fixture now applies only where it addresses its object: the operation must
+declare at least one required path parameter and the fixture must supply every
+one. A collection endpoint that leaks another user's records is a real bug, but
+it is a different bug with a different oracle, and answering it with
+"a resource is readable by an identity that does not own it" would be a
+confident answer to a question nobody asked. **TESTED**
+(`resource.TestAFixtureDoesNotApplyToOperationsThatAddressNoObject`, built from
+the operations that actually produced the false positives).
 
 ## 3. Residual risk accepted at this stage
 

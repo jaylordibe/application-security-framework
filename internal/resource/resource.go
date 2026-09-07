@@ -360,7 +360,20 @@ func templateName(segment string) (string, bool) {
 }
 
 // AppliesTo reports whether a fixture is intended for an operation.
+//
+// An empty Operations list means "wherever this fixture addresses something",
+// not "everywhere". The difference is the whole correctness of the check, and
+// getting it wrong was expensive: against a real application a device-token
+// fixture was applied to GET /api/health/liveness, GET /api/enums and
+// GET /api/roles, and every one of them produced a CONFIRMED HIGH finding
+// saying a non-owner had read the owner's resource. Two identities receiving
+// the same health response is correct behaviour, not object-level authorization
+// failure — but the check cannot know that once it has been pointed at an
+// operation that addresses no object.
 func (f Fixture) AppliesTo(op model.Operation) bool {
+	if !f.Addresses(op) {
+		return false
+	}
 	if len(f.Operations) == 0 {
 		return true
 	}
@@ -370,6 +383,33 @@ func (f Fixture) AppliesTo(op model.Operation) bool {
 		}
 	}
 	return false
+}
+
+// Addresses reports whether an operation actually identifies this fixture's
+// resource.
+//
+// Object-level authorization is about a specific object, so there has to be one
+// in the request. An operation with no path parameter names no object: it is a
+// collection, a health probe or an enumeration, and comparing two identities'
+// responses to it says nothing about ownership. An operation whose parameters
+// this fixture cannot fill is not addressing this resource either.
+//
+// This is deliberately about the *request*, not the response. A collection
+// endpoint may well leak another user's records — that is a real bug — but it is
+// a different one, with a different oracle, and reporting it as "a resource is
+// readable by an identity that does not own it" would be a confident answer to a
+// question nobody asked.
+func (f Fixture) Addresses(op model.Operation) bool {
+	required := op.RequiredPathParams()
+	if len(required) == 0 {
+		return false
+	}
+	for _, name := range required {
+		if v, ok := f.Values[name]; !ok || v == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // SortFixtures orders fixtures deterministically so runs are reproducible.

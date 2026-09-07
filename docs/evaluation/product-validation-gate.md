@@ -21,7 +21,7 @@ reported as clean unless it was actually tested.
 |---|---|
 | AppSec Framework | `1c2d361b2478f0a628e88038a4d332874fd8be70` (before validation changes) |
 | `jaylordibe/laravel-api` | `8302196839a50210693666797ff9433c219a02ee` (2026-09-01), unmodified, **run live** |
-| `jaylordibe/nestjs-api` | `84e19a2e309827a1d8047cb287431aff405bdd33` (2026-08-27), unmodified, read only |
+| `jaylordibe/nestjs-api` | `84e19a2e309827a1d8047cb287431aff405bdd33` (2026-08-27), unmodified, **run live** |
 | Nuclei | **v3.11.1**, real binary, pinned, installed via the repository's own `engine-integration` CI command |
 | nuclei-templates | commit `59ef5a2`, 13,686 templates, 13,479 signed |
 | ZAP | **not run** — see limitations |
@@ -41,7 +41,7 @@ every runtime measurement below is against that live instance.
 
 | | Hypothesis | Verdict |
 |---|---|---|
-| H1 | Detects application-specific authorization failures generic scanners miss | **NOT YET PROVEN** |
+| H1 | Detects application-specific authorization failures generic scanners miss | **PARTIALLY SUPPORTED** — mechanism verified on a real boundary; no true positive available |
 | H2 | Verification quality — observations vs verified findings | **SUPPORTED** |
 | H3 | Coverage honesty — exposes blocked/untested work | **SUPPORTED** |
 | H4 | Orchestration value beyond concatenating scanners | **PARTIALLY SUPPORTED** |
@@ -83,9 +83,26 @@ only ownership, so expressing this would mean using ownership to simulate
 tenancy — which §20 of the gate brief explicitly warns against, and which would
 be semantically wrong.
 
-H1 is therefore not disproven; it is **unproven on real applications**, because
-the one application that was stood up has no boundary to test and the one with
-real boundaries needs a dimension AppSec does not have.
+**`nestjs-api` was subsequently stood up and tested live**, which changed this
+result. Two identities were registered (`alice`, `bob`), alice created a device
+token, and the application enforced ownership correctly: owner `200`, non-owner
+`404` (anti-enumeration). AppSec reached the correct verdict —
+
+> `GET /api/device-tokens/{id}` **executed**: "the cross-owner boundary held:
+> alice owns fixture `alice-device-token` and could read it both before and
+> after, and bob was refused"
+
+— with the owner-reachability and liveness controls that distinguish a real
+denial from a dead credential or a vanished resource. That is a **verified true
+negative on a real ownership boundary**, which is the mechanism H1 depends on.
+
+It stops short of SUPPORTED because a true negative is not a detection. Neither
+reference application contains a real BOLA, so AppSec's ability to *find* one
+still rests on synthetic fixtures.
+
+Getting there also exposed the worst defect in this gate (§3, defect 6): on the
+first live cross-owner run AppSec produced **fourteen CONFIRMED HIGH false
+positives** and failed the build.
 
 The synthetic corpus does support the claim: 30 M2 scenarios pass, including
 misleading-200, dead-attacker-credential, resource-disappears-mid-test, shared
@@ -138,6 +155,12 @@ A scanner reporting "0 findings" against this application would be technically
 true and materially misleading. AppSec reports 0 findings *and* that it examined
 under a third of the surface. That difference is the product.
 
+The same measurement on `nestjs-api`, a larger and more carefully built
+application, is starker still: **84 operations, 10 executed** — 12% — with 35
+untested for `missing_resource`, 15 blocked by safety policy, 13 with no oracle
+(the specification leaves 17 operations unstated), 9 auth-route skips and 2
+indeterminate.
+
 Dead-credential scenario, live: with an expired token AppSec reported
 `liveness: bad`, the canary's exact failing status, and "results that depended on
 it are withdrawn and marked blocked". Raw scanner output in the same situation is
@@ -171,10 +194,19 @@ Baseline is genuinely excellent. Deep authorization is not.
 | Baseline assessment | 1 | **0** | 0 | ~5 s |
 | + framework adapter | 1 | 12 | 2 (adapter path, source root) | ~5 s |
 | + one identity | 1 | 16 | 4 (id, scheme, env var, canary) | ~5 s |
-| + cross-owner testing | — | — | **blocked**: application has no non-admin principal | — |
+| + cross-owner testing (laravel) | — | — | **blocked**: application has no non-admin principal | — |
+| + cross-owner testing (nestjs) | 6 | **33** | 2 identities, 2 credentials, 1 fixture id, 1 parameter value | ~15 min |
 
 Nothing duplicates OpenAPI: routes, methods and auth metadata are never restated
 by hand. That is the design working.
+
+Cross-owner setup on `nestjs-api` cost 33 configuration lines and six manual
+steps that AppSec cannot perform: register two users, mark both email-verified
+**directly in the database** (registration requires verification), log in twice,
+create a resource as one of them, and copy its UUID into `resources[].values`.
+Nothing keeps that UUID valid: it is a hand-copied identifier that goes stale the
+next time the database is reset. This is the deferred M2 fixture gap, measured —
+and it is the thing Hadrian creates dynamically.
 
 Against it: reaching a working identity took **two failed configuration
 attempts**, both needing the JSON schema to resolve — `control:` is spelled
@@ -220,9 +252,12 @@ hash (`717b1b8f…`), identical dispositions, identical (empty) finding set,
 | 2 | Nuclei `extracted-results` imported; contained a live session cookie | High (latent) | Fixed, with a regression test built from the real observed record |
 | 3 | Terminal silent about a rejected identity | High (false assurance) | Fixed |
 | 4 | `TestDoctorReportsMissingEnginesWithoutFailing` depended on ambient `PATH` — passed only on machines *without* an engine, so the repo's own engine-integration job would have broken it | Low | Fixed: `PATH` emptied in the test |
+| 6 | **The cross-owner check produced 14 confirmed high false positives on a real application.** An ownership fixture with no explicit operation allowlist applied to every operation it could "bind" — and an operation with *no* path parameters binds trivially. So a device-token fixture was applied to `GET /api/health/liveness`, `GET /api/enums`, `GET /api/roles`, `GET /api/permissions` and eleven others; two identities received identical bodies, as health and enumeration endpoints must; and each was reported as *"a resource is readable by an identity that does not own it"*, **confirmed, high**, exit code 1. Precision on that run: **0 of 14**. | **Critical** — the headline differentiator failing a build on false pretences | Fixed: `Fixture.Addresses()` requires the operation to actually name the object — at least one required path parameter, all supplied by the fixture. After: **0 findings, exit 0, one boundary checked** — the real one. |
 | 5 | **An engine wrote into the operator's working directory.** The environment handed to an engine is built from nothing, so it has no `HOME`, and Nuclei responds by creating a `.nuclei-config` tree in its working directory. The scan is contained by its workspace; the version probe that runs first had no directory at all. Running the test suite with Nuclei present left that tree in two package directories of this repository. | Low | Fixed: `scanner.ProbeVersion` runs every probe in a scratch directory and removes it |
 
-Defect 1 is the most significant. It means the M3 evaluation's adapter claims,
+| 7 | **`appsec scan http://localhost:3000` aborted against a running target.** `localhost` resolves to `::1` and `127.0.0.1`; the NestJS app binds IPv4 only, as most Node development servers do. The dialer checked every resolved address against scope — correctly — and then dialled only the first, returning connection-refused for the whole assessment. `curl` reaches the same target because it falls back. | Medium — the most natural first command fails | Fixed: each already-authorized address is tried in turn, sequentially. A single denied address still refuses the request before any dial. |
+
+Defects 6 and 1 are the most significant. Defect 1 means the M3 evaluation's adapter claims,
 which were measured on synthetic fixtures whose specs had no `servers` entry,
 did not hold on a real specification.
 
@@ -313,6 +348,13 @@ and the evidence does not support that:
   expectations on the real app, because the specification was already accurate;
 - two of the planned next milestones (roles, fixtures) are catching up to a
   competitor rather than extending a lead.
+
+The live `nestjs-api` run sharpened this rather than softening it. AppSec did
+reach the right answer on a real ownership boundary — but only after a fix, and
+the run *before* that fix would have failed a build with fourteen confirmed
+high-severity findings that were all wrong. Meanwhile the two boundaries that
+application actually spends its complexity on — 9 roles with 41 scoped
+permissions, and tenancy on three subjects — AppSec cannot express at all.
 
 Not STOP, because something real was measured. On a live application AppSec
 reported *11 of 38 operations tested, with a machine-readable reason for each of
@@ -413,8 +455,16 @@ would be CONTINUE. It is not, so it is not.
   environment (even a 3 MB image would not transfer, though the registry
   responded), so only Nuclei — installable through the repository's own Go-based
   CI command — could be exercised. H4 is partial for this reason.
-- **`nestjs-api` was read, not run.** Its ownership and tenancy model is
-  established from source; no request was ever made to it.
-- **No confirmed authorization vulnerability exists in the live corpus**, so H1's
-  detection claim rests entirely on synthetic fixtures.
+- **No confirmed authorization vulnerability exists in either live application.**
+  Both enforce the boundaries they define, so every live authorization result is
+  a true negative. AppSec's ability to *detect* a real BOLA still rests entirely
+  on synthetic fixtures.
+- **Tenancy was never exercised.** `nestjs-api` scopes `Business`,
+  `BusinessMembership` and `BusinessInvitation` by `businessId`, but no business
+  was created during this gate, and AppSec has no tenancy dimension to express
+  the boundary if one had been.
+- **Roles and permissions were never exercised.** `nestjs-api` has 9 roles and 41
+  scoped permissions; alice's `403` on `GET /api/users` is a real
+  function-level boundary that AppSec observed only as an HTTP status, because it
+  has no way to state "this identity should be refused this operation".
 - **One application, one framework, one language.**

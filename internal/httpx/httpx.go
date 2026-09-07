@@ -238,38 +238,65 @@ func (c *Client) dialContext(ctx context.Context, network, addr string) (net.Con
 		}
 	}
 
-	chosen := addrs[0].WithZone("")
-	if chosen.Is4In6() {
-		chosen = chosen.Unmap()
-	}
-	dialAddr := net.JoinHostPort(chosen.String(), fmt.Sprintf("%d", port))
-
-	conn, err := c.dial(ctx, network, dialAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	// Verify that the connection actually landed on the evaluated address. An
-	// address we cannot verify is refused rather than accepted, so the check
-	// fails closed.
-	ra, ok := conn.RemoteAddr().(*net.TCPAddr)
-	if !ok {
-		_ = conn.Close()
-		return nil, &ErrOutOfScope{
-			Target: dialAddr,
-			Reason: "the connection's remote address could not be verified",
+	// Each authorized address is tried in turn until one connects.
+	//
+	// Every address was checked above, and a single out-of-scope address among
+	// them already refused the whole request — so falling through to the second
+	// candidate cannot reach anywhere the first could not. What it fixes is a
+	// name that resolves to more addresses than the target listens on, which is
+	// the ordinary case for "localhost" on a machine with IPv6: it resolves to
+	// ::1 and 127.0.0.1, and a great many development servers bind only IPv4.
+	// Dialling addrs[0] and giving up turned "appsec scan http://localhost:3000"
+	// — the most natural first command anyone types — into a connection-refused
+	// abort against a target that was running and reachable.
+	//
+	// This is sequential, not Happy Eyeballs: the addresses are not raced, so
+	// one request still makes one connection and the URL gate and the address
+	// gate stay one-to-one.
+	var lastErr error
+	for _, a := range addrs {
+		chosen := a.WithZone("")
+		if chosen.Is4In6() {
+			chosen = chosen.Unmap()
 		}
-	}
-	got, _ := netip.AddrFromSlice(ra.IP)
-	got = got.Unmap().WithZone("")
-	if !got.IsValid() || got != chosen {
-		_ = conn.Close()
-		return nil, &ErrOutOfScope{
-			Target: got.String(),
-			Reason: "connection landed on an address that was not evaluated",
+		dialAddr := net.JoinHostPort(chosen.String(), fmt.Sprintf("%d", port))
+
+		conn, err := c.dial(ctx, network, dialAddr)
+		if err != nil {
+			lastErr = err
+			// A cancelled or expired context is not something a further
+			// candidate can rescue, and retrying would outlive the caller.
+			if ctx.Err() != nil {
+				break
+			}
+			continue
 		}
+
+		// Verify that the connection actually landed on the evaluated address.
+		// An address we cannot verify is refused rather than accepted, so the
+		// check fails closed. A verification failure ends the attempt outright
+		// rather than moving on: it means something between the resolver and
+		// the socket disagreed, and that is not a condition to retry through.
+		ra, ok := conn.RemoteAddr().(*net.TCPAddr)
+		if !ok {
+			_ = conn.Close()
+			return nil, &ErrOutOfScope{
+				Target: dialAddr,
+				Reason: "the connection's remote address could not be verified",
+			}
+		}
+		got, _ := netip.AddrFromSlice(ra.IP)
+		got = got.Unmap().WithZone("")
+		if !got.IsValid() || got != chosen {
+			_ = conn.Close()
+			return nil, &ErrOutOfScope{
+				Target: got.String(),
+				Reason: "connection landed on an address that was not evaluated",
+			}
+		}
+		return conn, nil
 	}
-	return conn, nil
+	return nil, lastErr
 }
 
 // limiter paces outbound requests.
