@@ -133,7 +133,7 @@ concept rather than a per-adapter hack.
 - `laravel-api`: `php artisan scramble:export` produces the specification **without
   serving the app**, with security schemes derived from `auth:api` middleware. 33 of 37
   operations carry a bearer requirement; public routes emit `security: []`.
-- `nestjs-api`: **runtime-only**. UI at `/api/docs`, JSON at `/api/docs-json`. Cannot be
+- `nestjs-api`: **runtime-only**. UI at `/api/docs`, JSON at `/api/docs/json`. Cannot be
   exported without booting the application with a database, Redis, and a synced
   permission catalog.
 
@@ -146,7 +146,7 @@ inside the target's own runtime, whatever our core is written in.
 
 ## 7. Finding: the existing DAST on both applications cannot find authorization bugs
 
-- `nestjs-api`: `zap-api-scan.py` against `/api/docs-json`, authenticated by a replacer
+- `nestjs-api`: `zap-api-scan.py` against `/api/docs/json`, authenticated by a replacer
   file injecting **one `platform_admin` token holding `manage all`**. `.zap/rules.tsv` is
   **entirely comments — zero active rules** — and the job runs with `-I`, so it can never
   fail.

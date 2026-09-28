@@ -218,3 +218,15 @@ func TestOperationOrderIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// NestJS serves its document at /api/docs-json by default; the nestjs-api
+// reference template moves it under the protected /api/docs subtree. Probing
+// must find both, or discovery goes blind on every app built from the template.
+func TestWellKnownPathsCoverBothNestJSLocations(t *testing.T) {
+	paths := strings.Join(WellKnownPaths(), " ")
+	for _, want := range []string{"/api/docs-json", "/api/docs/json"} {
+		if !strings.Contains(" "+paths+" ", " "+want+" ") {
+			t.Errorf("WellKnownPaths() missing %s", want)
+		}
+	}
+}

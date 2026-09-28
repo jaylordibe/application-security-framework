@@ -606,6 +606,7 @@ func WellKnownPaths() []string {
 		"/swagger.json",
 		"/api-docs",
 		"/api/docs-json",
+		"/api/docs/json",
 		"/v3/api-docs",
 		"/docs/api.json",
 		"/api/openapi.json",

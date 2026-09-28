@@ -119,14 +119,14 @@ jobs:
           npx prisma migrate deploy
           nohup yarn start:dev > "$RUNNER_TEMP/nestjs.log" 2>&1 &
           for i in $(seq 1 90); do
-            curl -fsS -o /dev/null http://127.0.0.1:3000/api/docs-json && break
+            curl -fsS -o /dev/null http://127.0.0.1:3000/api/docs/json && break
             sleep 2
           done
-          curl -fsS -o /dev/null http://127.0.0.1:3000/api/docs-json || {
+          curl -fsS -o /dev/null http://127.0.0.1:3000/api/docs/json || {
             echo "::error::the application did not start"; tail -40 "$RUNNER_TEMP/nestjs.log"; exit 1; }
 
       - name: assess it
         env:
           APPSEC_REFERENCE_TARGET: http://127.0.0.1:3000
-          APPSEC_REFERENCE_SPEC: http://127.0.0.1:3000/api/docs-json
+          APPSEC_REFERENCE_SPEC: http://127.0.0.1:3000/api/docs/json
         run: go test -v -count=1 -run TestReferenceApplication ./evals/
